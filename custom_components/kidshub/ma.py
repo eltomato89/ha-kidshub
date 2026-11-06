@@ -2,34 +2,45 @@
 
 Verified against the client pinned by Home Assistant 2026.10.4
 (``homeassistant/components/music_assistant/manifest.json``:
-``music-assistant-client==1.5.1``, which pulls ``music-assistant-models==1.1.189``):
+``music-assistant-client==1.5.1``, which pulls ``music-assistant-models==1.1.189``),
+and live (2026-11-06) against HA 2026.11.0 (``music-assistant-client==1.6.0``, same
+queue/music/player API) with the MA 2.10.9 add-on (``scripts/ma_probe.py``):
 
 - Client: ``entry.runtime_data.mass`` of the loaded ``music_assistant`` config entry
   (``MusicAssistantEntryData.mass``, a ``MusicAssistantClient``); connection state via
-  ``mass.connection.connected``; server URL in ``entry.data["url"]``.
+  ``mass.connection.connected``. ``entry.data["url"]`` of the add-on is the container
+  host from hassio discovery (``http://<slug>-music-assistant:8094``, not reachable from
+  the LAN); ``mass.server_info.base_url`` is MA's LAN address and is preferred.
 - Library: ``mass.music.get_library_playlists/_albums/_audiobooks/_podcasts(limit=, offset=)``.
 - Children: ``mass.music.get_playlist_tracks(item_id, provider)``,
   ``get_album_tracks(item_id, provider)``, ``get_podcast_episodes(item_id, provider)``.
   Audiobooks have no browsable children (chapters are part of the item).
 - Single item: ``mass.music.get_item_by_uri(uri)``.
-- Images: ``mass.get_media_item_image_url(item)`` (may be relative to the MA server, made
-  absolute with the entry URL here).
+- Images: ``mass.get_media_item_image_url(item)``: absolute (``<base_url>/imageproxy/<id>``,
+  fetchable without auth, or the provider's own https URL); relative ones are joined with
+  the base URL here.
 - Players: ``mass.players.get(player_id)`` / iteration over ``mass.players``
-  (``Player.player_id``, ``Player.name``).
+  (``Player.player_id``, ``Player.name``, ``Player.output_protocols``).
 - Queues: ``mass.player_queues.play_media(queue_id, media, option=QueueOption.REPLACE)``,
-  ``seek(queue_id, position)`` (**seconds**), ``pause/resume/next/previous/stop(queue_id)``,
+  ``seek(queue_id, position)`` and ``play_index(queue_id, index, seek_position=)``
+  (**seconds**; a ``seek_position`` of 0 makes MA resume an audiobook/episode at MA's
+  own stored position), ``pause/resume/next/previous/stop/clear(queue_id)``. ``ADD`` on
+  a cleared queue does not start playback.
   ``mass.player_queues.get(queue_id)`` -> ``PlayerQueue`` (``current_item``, ``current_index``,
-  ``elapsed_time`` in seconds, ``state``, ``sources``). The queue id of a player is its
-  player id.
+  ``elapsed_time`` in seconds, ``state``, ``sources``). ``sources`` are the enqueued
+  tracks/albums/playlists (``ItemMapping`` with ``media_type``), so only a container
+  counts as the queue's container. The queue id of a player is its player id.
 - Events: ``mass.subscribe(cb, event_filter, id_filter)`` returns an unsubscribe callable;
   ``EventType.QUEUE_ADDED/QUEUE_UPDATED/QUEUE_TIME_UPDATED`` with ``object_id`` = queue id.
 - MA URIs have the form ``{provider}://{media_type}/{item_id}``.
 - ``Track.album`` is an ``ItemMapping``/``Album`` (``uri``) or None.
 - Durations in MA models are seconds; ``PodcastEpisode.metadata.release_date`` is a datetime.
 
-Sendspin players: the app registers with ``client_id`` ``kidshub-<device_id>`` and MA keeps
-the player under exactly that id. ``player_id_for`` falls back to a match on the player
-name (``KidsHub <child>``) in case an MA version derives the id differently.
+Sendspin players: the app registers with ``client_id`` ``kidshub-<device_id>``. MA 2.10
+registers that client as a hidden *protocol* player (not in ``players/all``) and wraps it
+in a universal player with a random id (live: ``kidshub-test`` -> ``up5e89c75a``) whose
+``output_protocols`` list the client id. ``player_id_for`` therefore tries the client id,
+then the output protocols, then the player name (``KidsHub <child>``).
 """
 
 from __future__ import annotations
@@ -87,6 +98,15 @@ _LIBRARY_FETCH = {
     "audiobook": "get_library_audiobooks",
     "podcast": "get_library_podcasts",
 }
+
+
+_CONTAINER_MEDIA_TYPES = {"album", "playlist", "podcast", "audiobook"}
+
+
+def _base_url(mass: Any) -> str | None:
+    """Return MA's own ``base_url`` (LAN address MA gives its players)."""
+    url = getattr(getattr(mass, "server_info", None), "base_url", None)
+    return url if isinstance(url, str) and url else None
 
 
 @dataclass(frozen=True)
@@ -179,7 +199,7 @@ class MaAdapter:
         mass = getattr(entry.runtime_data, "mass", None)
         if mass is None or not mass.connection.connected:
             raise MaUnavailable("Music Assistant is not connected")
-        return mass, str(entry.data.get("url", ""))
+        return mass, _base_url(mass) or str(entry.data.get("url", ""))
 
     @property
     def available(self) -> bool:
@@ -292,11 +312,19 @@ class MaAdapter:
     # -- sendspin / players ---------------------------------------------
 
     def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
-        """Return the ``config.sendspin`` block, ``None`` without an MA entry."""
+        """Return the ``config.sendspin`` block, ``None`` without an MA entry.
+
+        The host is taken from MA's own ``base_url`` (what MA tells its players);
+        the entry URL of the add-on is the container host (hassio discovery,
+        e.g. ``http://d5369777-music-assistant:8094``), which the app cannot
+        resolve. It is only the fallback while MA is not connected.
+        """
         entries = self.hass.config_entries.async_entries(MA_DOMAIN)
         if not entries:
             return None
-        url = (self._loaded_entry() or entries[0]).data.get("url")
+        loaded = self._loaded_entry()
+        mass = getattr(getattr(loaded, "runtime_data", None), "mass", None)
+        url = _base_url(mass) or (loaded or entries[0]).data.get("url")
         host = urlparse(str(url or "")).hostname
         if not host:
             return None
@@ -309,10 +337,18 @@ class MaAdapter:
         }
 
     async def player_id_for(self, client_id: str, name: str | None = None) -> str | None:
-        """Return the MA player id of a Sendspin client (id first, then name)."""
+        """Return the MA player id of a Sendspin client.
+
+        Order: the client id itself, the player that lists the client id as an
+        output protocol (MA 2.10 universal player), then the player name.
+        """
         mass, _ = self._client()
         if mass.players.get(client_id) is not None:
             return client_id
+        for player in mass.players:
+            protocols = getattr(player, "output_protocols", None) or []
+            if any(getattr(p, "output_protocol_id", None) == client_id for p in protocols):
+                return player.player_id
         if name:
             for player in mass.players:
                 if player.name == name:
@@ -402,9 +438,12 @@ class MaAdapter:
         if queue_item is not None and queue_item.media_item is not None:
             current = self._to_item(mass, base_url, queue_item.media_item)
         sources = getattr(queue, "sources", None) or []
+        container = sources[0] if sources else None
+        if str(getattr(container, "media_type", "")) not in _CONTAINER_MEDIA_TYPES:
+            container = None  # MA records enqueued plain tracks as sources too
         return QueueSnapshot(
             current=current,
-            container_uri=getattr(sources[0], "uri", None) if sources else None,
+            container_uri=getattr(container, "uri", None),
             index=queue.current_index or 0,
             elapsed_ms=int(elapsed * 1000),
             playing=playing,

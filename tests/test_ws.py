@@ -108,11 +108,32 @@ async def test_auth_token_of_other_device(
 async def test_auth_malformed_first_message(
     hass: HomeAssistant, hass_client_no_auth
 ) -> None:
+    """Protocol 3.1: auth_invalid only for an unknown device or a wrong token."""
     await _setup(hass)
     ws = await (await hass_client_no_auth()).ws_connect(WS_URL)
     await ws.send_json({"type": "state"})
-    assert (await ws.receive_json()) == {"type": "auth_invalid"}
-    await _closed_by_server(ws)
+    await _closed_without_auth_invalid(ws)
+
+
+@lingering_heartbeat
+@pytest.mark.parametrize(
+    "first",
+    [
+        "not json",
+        {"type": "auth", "device_id": "dev-a"},
+        {"type": "auth", "device_id": 7, "token": "tok-a"},
+    ],
+)
+async def test_auth_malformed_auth_closes_without_invalid(
+    hass: HomeAssistant, hass_client_no_auth, first
+) -> None:
+    await _setup(hass)
+    ws = await (await hass_client_no_auth()).ws_connect(WS_URL)
+    if isinstance(first, str):
+        await ws.send_str(first)
+    else:
+        await ws.send_json(first)
+    await _closed_without_auth_invalid(ws)
 
 
 @lingering_heartbeat
@@ -122,7 +143,7 @@ async def test_auth_timeout(
     monkeypatch.setattr(ws_module, "AUTH_TIMEOUT", 0.1)
     await _setup(hass)
     ws = await (await hass_client_no_auth()).ws_connect(WS_URL)
-    await _closed_by_server(ws)
+    await _closed_without_auth_invalid(ws)
 
 
 async def test_unknown_request(hass: HomeAssistant, hass_client_no_auth) -> None:
@@ -336,10 +357,7 @@ async def test_auth_deadline_is_absolute(
     task = asyncio.create_task(spam())
     try:
         msg = await asyncio.wait_for(ws.receive(), 2)
-        if msg.type is WSMsgType.TEXT:
-            assert msg.json() == {"type": "auth_invalid"}
-            msg = await asyncio.wait_for(ws.receive(), 2)
-        assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED)
+        assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED), msg  # no auth_invalid
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

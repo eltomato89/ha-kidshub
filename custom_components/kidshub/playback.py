@@ -321,10 +321,18 @@ class PlaybackService:
                 self._album = previous
                 self._request_resubscribe()
                 raise
-            if album is not None:
-                self.device.store.set_album_context(album.uri, album.tracks)
-            else:
-                self.device.store.set_album_context(None)
+            except asyncio.CancelledError:
+                # e.g. the wake_play timeout: MA may still take the new queue,
+                # so the old album context must not survive a restart
+                self._store_album_context(album)
+                raise
+            self._store_album_context(album)
+
+    def _store_album_context(self, album: _Album | None) -> None:
+        if album is not None:
+            self.device.store.set_album_context(album.uri, album.tracks)
+        else:
+            self.device.store.set_album_context(None)
 
     def _music_blocked(self) -> bool:
         """Return whether music is disabled and the queue holds music."""
@@ -382,6 +390,8 @@ class PlaybackService:
         track_index = 0
         is_last = False
         album = self._album
+        if album is not None and not self._allowed_album(album.uri):
+            album = None  # the album was removed from the Hörspiel allowlist
         if kind == "track" and album is not None and it.uri in album.tracks:
             kind, container, progress_uri = "album_track", album.uri, album.uri
             track_index = album.tracks.index(it.uri)
@@ -389,10 +399,13 @@ class PlaybackService:
         elif kind == "track" and self._allowed_album(container):
             # album started elsewhere (e.g. MA UI): queue index = album index
             kind, progress_uri, track_index = "album_track", container, snap.index
-        elif kind == "track" and self._allowed_album(it.album_uri):
-            # no album context (e.g. queue built elsewhere): the track's own
-            # album decides; its album index is unknown, the queue index is
-            # the best guess
+        elif (
+            kind == "track" and container is None and self._allowed_album(it.album_uri)
+        ):
+            # no album context and no container (e.g. a single track started
+            # elsewhere): the track's own album decides; its album index is
+            # unknown, the queue index is the best guess. Never for a track of
+            # a playlist, whose progress would overwrite the Hörspiel's.
             container = it.album_uri
             kind, progress_uri, track_index = "album_track", container, snap.index
         elif kind in ("episode", "audiobook"):

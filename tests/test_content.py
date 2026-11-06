@@ -543,3 +543,107 @@ async def test_favorites_register_stored_images(hass: HomeAssistant) -> None:
     assert not device.content.is_known_image("http://cdn.example/a.jpg")
     device.content.favorites("track")
     assert device.content.is_known_image("http://cdn.example/a.jpg")
+
+
+def _loaded_ma_entry(hass: HomeAssistant, mass, url="http://192.168.1.10:8095"):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry = MockConfigEntry(
+        domain="music_assistant", data={"url": url}, state=ConfigEntryState.LOADED
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(mass=mass, listen_task=Mock())
+    return entry
+
+
+class _Players:
+    """``mass.players``: iterable, ``get(player_id)`` (MA client shape)."""
+
+    def __init__(self, *players) -> None:
+        self._players = {p.player_id: p for p in players}
+
+    def __iter__(self):
+        return iter(self._players.values())
+
+    def get(self, player_id):
+        return self._players.get(player_id)
+
+
+async def test_player_id_for_universal_player(hass: HomeAssistant) -> None:
+    """MA 2.10 hides the Sendspin protocol player behind a universal player.
+
+    Live (MA 2.10.9): client ``kidshub-test`` became player ``up5e89c75a``; the
+    protocol player is not in ``players/all``, its id is an ``output_protocol_id``.
+    """
+    from types import SimpleNamespace
+
+    def player(player_id, name, *protocols):
+        return SimpleNamespace(
+            player_id=player_id,
+            name=name,
+            output_protocols=[SimpleNamespace(output_protocol_id=p) for p in protocols],
+        )
+
+    mass = _fake_client()
+    mass.players = _Players(
+        player("up-stale", "KidsHub Paul", "kidshub-old"),  # earlier pairing
+        player("up5e89c75a", "Pauls Zimmer", "kidshub-abc"),  # renamed in MA
+    )
+    _loaded_ma_entry(hass, mass)
+    adapter = MaAdapter(hass)
+    assert await adapter.player_id_for("kidshub-abc", "KidsHub Paul") == "up5e89c75a"
+    # an MA version that keeps the client id as player id
+    mass.players = _Players(player("kidshub-abc", "KidsHub Paul"))
+    assert await adapter.player_id_for("kidshub-abc", "KidsHub Paul") == "kidshub-abc"
+    # last resort: the name
+    mass.players = _Players(player("up1", "KidsHub Paul"))
+    assert await adapter.player_id_for("kidshub-abc", "KidsHub Paul") == "up1"
+    assert await adapter.player_id_for("kidshub-abc", None) is None
+
+
+async def test_sendspin_info_uses_ma_base_url(hass: HomeAssistant) -> None:
+    """The add-on entry URL is the container host (hassio discovery), not the LAN IP.
+
+    Live: discovery gives ``http://d5369777-music-assistant:8094``, MA's
+    ``server_info.base_url`` is ``http://172.20.60.100:8095``.
+    """
+    from types import SimpleNamespace
+
+    mass = _fake_client()
+    mass.server_info = SimpleNamespace(base_url="http://172.20.60.100:8095")
+    _loaded_ma_entry(hass, mass, url="http://d5369777-music-assistant:8094")
+    info = MaAdapter(hass).sendspin_info("abc", "Paul")
+    assert info["url"] == "ws://172.20.60.100:8927/sendspin"
+
+
+def test_snapshot_container_only_for_containers() -> None:
+    """MA records plain tracks as queue sources too; they are no container."""
+    from types import SimpleNamespace
+
+    from music_assistant_models.enums import PlaybackState
+
+    adapter = MaAdapter.__new__(MaAdapter)
+    mass = SimpleNamespace(get_media_item_image_url=lambda obj: None)
+
+    def queue(*sources):
+        return SimpleNamespace(
+            state=PlaybackState.IDLE,
+            elapsed_time=0,
+            current_item=None,
+            current_index=0,
+            sources=list(sources),
+        )
+
+    def src(uri, media_type):
+        return SimpleNamespace(uri=uri, media_type=media_type)
+
+    snap = adapter._snapshot(mass, "", queue(src("spotify://track/1", "track")))
+    assert snap.container_uri is None
+    snap = adapter._snapshot(mass, "", queue(src("library://playlist/2", "playlist")))
+    assert snap.container_uri == "library://playlist/2"
+    snap = adapter._snapshot(mass, "", queue(src("library://album/1", "album")))
+    assert snap.container_uri == "library://album/1"
+    assert adapter._snapshot(mass, "", queue()).container_uri is None

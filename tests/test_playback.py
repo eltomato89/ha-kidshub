@@ -872,3 +872,66 @@ def test_ma_item_carries_track_album() -> None:
     assert adapter._to_item(mass, "", track).album_uri == "library://album/7"
     no_album = SimpleNamespace(**{**vars(track), "album": None})
     assert adapter._to_item(mass, "", no_album).album_uri is None
+
+
+async def test_track_album_fallback_not_in_playlist_queue(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """A playlist track whose album is an allowed Hörspiel stays a music track."""
+    import dataclasses
+
+    fake = _fake()
+    await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    track = dataclasses.replace(TRACK_A, album_uri=ALBUM.uri)
+    fake.emit_queue(PLAYER, _snap(track, elapsed_ms=2000, index=1, container=PL1.uri))
+    msg = await _next(ws, "now_playing")
+    assert (msg["kind"], msg["container_uri"]) == ("track", PL1.uri)
+    assert _device(hass).store.get_progress(ALBUM.uri) is None
+    await ws.close()
+
+
+async def test_album_context_respects_allowlist(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """A (persisted) album context of an album no longer allowed is ignored."""
+    fake = _fake()
+    entry = await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False))["success"]
+    await ws.close()
+    hass.config_entries.async_update_entry(
+        entry, options={**OPTIONS, "audiobooks": [BOOK.uri]}
+    )
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    device = _device(hass)
+    assert device.store.album_context is not None  # still persisted
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(PLAYER, _snap(_as_track(ALBUM_TRACKS[3]), elapsed_ms=5000, index=3))
+    msg = await _next(ws, "now_playing")
+    assert (msg["kind"], msg["container_uri"]) == ("track", None)
+    assert device.store.get_progress(ALBUM.uri) is None
+    await ws.close()
+
+
+async def test_wake_play_timeout_clears_album_context(
+    hass: HomeAssistant, hass_client_no_auth, monkeypatch
+) -> None:
+    monkeypatch.setattr(playback_module, "WAKE_PLAY_TIMEOUT", 0.05)
+    fake = _fake()
+    await _setup(hass, fake, {**OPTIONS, "wake_media_uri": PL1.uri})
+    device = _device(hass)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False))["success"]
+    assert device.store.album_context is not None
+
+    async def stall(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    fake.play = stall
+    res = await _request(ws, 2, "wake_play")
+    assert res["error"]["code"] == "ma_unavailable"
+    # MA may still start the wake music: the album context must not outlive it
+    assert device.store.album_context is None
+    await ws.close()

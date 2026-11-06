@@ -53,6 +53,10 @@ class _NotLoaded(Exception):
     """Paired device whose entry is not loaded right now (reload, HA start)."""
 
 
+class _AuthInvalid(Exception):
+    """Unknown device or wrong token: the app must pair again (protocol 3.1)."""
+
+
 class WsSession:
     """One connection of the app."""
 
@@ -108,6 +112,10 @@ class WsSession:
             # ignore binary and other frames
 
     async def _authenticate(self) -> KidDevice | None:
+        """Return the device; ``None`` for a timeout or a malformed handshake.
+
+        Raises ``_AuthInvalid`` (unknown device, wrong token) or ``_NotLoaded``.
+        """
         try:
             # Absolute deadline for the whole handshake, regardless of
             # pings or binary frames sent in between.
@@ -128,9 +136,9 @@ class WsSession:
             # wrong; a known but unloaded device just gets the socket closed.
             if _paired_with_token(self._hass, device_id, token):
                 raise _NotLoaded
-            return None
+            raise _AuthInvalid
         if not device.verify_token(token):
-            return None
+            raise _AuthInvalid
         version = msg.get("app_version")
         device.app_version = version if isinstance(version, str) else None
         return device
@@ -139,12 +147,16 @@ class WsSession:
         """Handshake and serve the connection until it closes."""
         try:
             device = await self._authenticate()
-        except _NotLoaded:
-            await self.close()  # no auth_invalid: the app retries with backoff
-            return
-        if device is None:
+        except _AuthInvalid:
             await self.send_json({"type": "auth_invalid"})
-            await self._ws.close()
+            await self.close()
+            return
+        except _NotLoaded:
+            device = None
+        if device is None:
+            # timeout, malformed handshake or entry not loaded: no auth_invalid,
+            # the app retries with backoff (auth_invalid makes it unpair)
+            await self.close()
             return
         self.device = device
         try:

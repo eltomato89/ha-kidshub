@@ -95,6 +95,7 @@ async def test_pairing_timeout(hass: HomeAssistant, monkeypatch) -> None:
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "pairing_timeout"
+    assert not hass.data[DOMAIN].pairing._pending
 
 
 async def test_flow_aborts_too_many_attempts(
