@@ -26,6 +26,7 @@ from .const import (
     ENTRY_TYPE_SETTINGS,
 )
 from .config_builder import DEFAULT_COLORS
+from .device import MaUnavailable
 from .pairing import PAIRING_TTL, PendingPairing
 
 PAIRING_TIMEOUT: float = PAIRING_TTL
@@ -160,7 +161,14 @@ STOP_BUTTON_DOMAINS = ["button", "input_button", "event", "binary_sensor"]
 
 # Menu of the device options flow; add a step by adding its id here and an
 # ``async_step_<id>`` method.
-OPTIONS_MENU = ["room", "alarm_extras"]
+OPTIONS_MENU = ["room", "alarm_extras", "content"]
+
+# option key -> MA library kinds offered for it
+CONTENT_LIBRARIES: dict[str, tuple[str, ...]] = {
+    "playlists": ("playlist",),
+    "audiobooks": ("album", "audiobook"),
+    "podcasts": ("podcast",),
+}
 
 
 def _suggested(key: str, value: Any) -> vol.Optional:
@@ -289,3 +297,45 @@ class DeviceOptionsFlow(OptionsFlow):
                 }
             ),
         )
+
+    async def async_step_content(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the allowed playlists, albums/audiobooks and podcasts."""
+        if user_input is not None and user_input:
+            for key in CONTENT_LIBRARIES:
+                self._options[key] = list(user_input.get(key) or [])
+            return self._save()
+        ma = async_get_data(self.hass).ma
+        try:
+            if ma is None or not ma.available:
+                raise MaUnavailable("Music Assistant is not available")
+            libraries = {
+                key: [
+                    item
+                    for lib in await asyncio.gather(*(ma.library(k) for k in kinds))
+                    for item in lib
+                ]
+                for key, kinds in CONTENT_LIBRARIES.items()
+            }
+        except MaUnavailable:
+            return self.async_show_form(
+                step_id="content",
+                data_schema=vol.Schema({}),
+                errors={"base": "ma_unavailable"},
+            )
+        schema: dict[Any, Any] = {}
+        for key, items in libraries.items():
+            current = list(self._options.get(key) or [])
+            options = [{"value": i.uri, "label": i.title or i.uri} for i in items]
+            known = {i.uri for i in items}
+            # keep selected items that MA no longer lists, so saving keeps them
+            options += [{"value": u, "label": u} for u in current if u not in known]
+            schema[vol.Optional(key, default=current)] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=options,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        return self.async_show_form(step_id="content", data_schema=vol.Schema(schema))

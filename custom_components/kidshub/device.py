@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .config_builder import build_config
-from .const import CONF_CHILD_NAME, CONF_DEVICE_ID, CONF_TOKEN_HASH
+from .const import CONF_CHILD_NAME, CONF_DEVICE_ID, CONF_TOKEN_HASH, DOMAIN
 from .store import KidStore
 
 if TYPE_CHECKING:
@@ -123,6 +123,10 @@ class KidDevice:
     def _notify(self) -> None:
         async_dispatcher_send(self.hass, self.signal)
 
+    def notify(self) -> None:
+        """Tell the entities that device data (e.g. ratings) changed."""
+        self._notify()
+
     async def attach(self, session: WsSession) -> None:
         """Make ``session`` the active one, closing any previous session."""
         old, self._session = self._session, session
@@ -143,14 +147,18 @@ class KidDevice:
             await session.send_json(msg)
 
     def config_message(self) -> dict[str, Any]:
-        """Build the current ``config`` message (sendspin wired in a later task)."""
+        """Build the current ``config`` message."""
+        child_name = self.entry.data[CONF_CHILD_NAME]
+        data = self.hass.data.get(DOMAIN)
+        ma = getattr(data, "ma", None)
+        sendspin = ma.sendspin_info(self.device_id, child_name) if ma else None
         return build_config(
             version=self.config_version,
-            child_name=self.entry.data[CONF_CHILD_NAME],
+            child_name=child_name,
             settings=self.store.settings,
             options=self.entry.options,
             hass_states=self.hass.states.get,
-            sendspin=None,
+            sendspin=sendspin,
         )
 
     async def push_config(self) -> None:

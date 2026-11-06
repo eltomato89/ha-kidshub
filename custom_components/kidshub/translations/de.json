@@ -156,7 +156,8 @@
         "title": "Optionen",
         "menu_options": {
           "room": "Zimmer",
-          "alarm_extras": "Wecker-Extras"
+          "alarm_extras": "Wecker-Extras",
+          "content": "Inhalte"
         }
       },
       "room": {
@@ -186,10 +187,22 @@
           "wake_lamp_entity": "Weck-Lampe",
           "stop_button_entity": "Stopp-Taster"
         }
+      },
+      "content": {
+        "title": "Inhalte",
+        "description": "Welche Inhalte aus Music Assistant darf das Kind nutzen?",
+        "data": {
+          "playlists": "Playlists (Musik)",
+          "audiobooks": "Alben und Hörbücher",
+          "podcasts": "Podcasts"
+        }
       }
     },
     "abort": {
       "no_options": "Dieser Eintrag hat keine Optionen."
+    },
+    "error": {
+      "ma_unavailable": "Music Assistant ist nicht erreichbar. Bitte die Music-Assistant-Integration prüfen und erneut versuchen."
     }
   }
 }

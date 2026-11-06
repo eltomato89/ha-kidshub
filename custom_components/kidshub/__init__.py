@@ -19,7 +19,9 @@ from .const import (
     ENTRY_TYPE_DEVICE,
     PLATFORMS,
 )
+from .content import ContentService
 from .device import KidDevice
+from .ma import MaAdapter
 from .pairing import PairingRegistry
 from .room_bridge import RoomBridge
 from .views import PairView, WsView
@@ -34,6 +36,7 @@ class KidsHubData:
     devices: dict[str, Any] = field(default_factory=dict)  # device_id -> KidDevice
     pairing: PairingRegistry = field(default_factory=PairingRegistry)
     views_registered: bool = False
+    ma: MaAdapter | None = None  # set in async_setup; tests inject a fake
 
 
 def async_get_data(hass: HomeAssistant) -> KidsHubData:
@@ -48,7 +51,9 @@ def async_get_data(hass: HomeAssistant) -> KidsHubData:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the KidsHub component (views are needed before any entry)."""
-    async_get_data(hass)
+    data = async_get_data(hass)
+    if data.ma is None:
+        data.ma = MaAdapter(hass)
     return True
 
 
@@ -77,6 +82,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.async_load()
         data.devices[entry.data[CONF_DEVICE_ID]] = device
         _track_sw_version(hass, entry, device)
+        assert data.ma is not None
+        ContentService(device, data.ma)
         bridge = RoomBridge(hass, device)
         bridge.start()
         entry.async_on_unload(bridge.stop)

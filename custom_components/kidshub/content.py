@@ -1,0 +1,237 @@
+"""Content requests of one device: ``browse``, ``favorites``, ``rate`` (protocol 3.3)."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
+
+from .device import InvalidRequest, KidDevice, NotAllowed
+from .sorting import sort_episodes, sort_tracks
+
+if TYPE_CHECKING:
+    from .ma import MaAdapter, MaItem
+
+FAVORITES_PREFIX = "kidshub://favorites/"
+FAVORITES_MIN_STARS = 4
+CHILDREN_TTL = 60.0
+
+# section -> (option key, library kinds, favorites kind)
+SECTIONS: dict[str, tuple[str, tuple[str, ...], str]] = {
+    "music": ("playlists", ("playlist",), "track"),
+    "audiobooks": ("audiobooks", ("album", "audiobook"), "audiobook"),
+    "podcasts": ("podcasts", ("podcast",), "episode"),
+}
+CONTENT_OPTIONS = tuple(key for key, _, _ in SECTIONS.values())
+
+# favorites kind -> rating kinds it lists (whole albums count as audiobooks)
+FAVORITE_KINDS: dict[str, tuple[str, ...]] = {
+    "track": ("track",),
+    "episode": ("episode",),
+    "audiobook": ("audiobook", "album"),
+}
+RATE_KINDS = {"track", "album_track", "episode", "audiobook", "album"}
+PROGRESS_KINDS = {"episode", "audiobook", "album"}
+SORTS = {"default", "stars"}
+
+
+def image_url(image: str | None, size: int = 256) -> str | None:
+    """Rewrite an MA image URL to the KidsHub image proxy."""
+    if not image:
+        return None
+    return f"/api/kidshub/img?u={quote(image, safe='')}&s={size}"
+
+
+class ContentService:
+    """Browse, favorites and ratings against the content allowlist of a device."""
+
+    def __init__(self, device: KidDevice, ma: MaAdapter) -> None:
+        self.device = device
+        self.ma = ma
+        # Item currently playing on this device; set by the playback code so that
+        # it can be rated even when it is not part of an allowed container.
+        self.now_playing: MaItem | None = None
+        self._children: dict[str, tuple[float, list[MaItem]]] = {}
+        device.register_handler("browse", self._handle_browse)
+        device.register_handler("favorites", self._handle_favorites)
+        device.register_handler("rate", self._handle_rate)
+
+    # -- allowlist --------------------------------------------------------
+
+    def allowed(self, section: str | None = None) -> list[str]:
+        """Return the allowed container URIs (of one section or of all)."""
+        options = self.device.entry.options
+        keys = [SECTIONS[section][0]] if section else CONTENT_OPTIONS
+        result: list[str] = []
+        for key in keys:
+            result.extend(u for u in options.get(key) or [] if u not in result)
+        return result
+
+    async def children(self, uri: str, *, fresh: bool = False) -> list[MaItem]:
+        """Return the children of a container, cached for ``CHILDREN_TTL``."""
+        cached = self._children.get(uri)
+        now = time.monotonic()
+        if not fresh and cached is not None and now - cached[0] < CHILDREN_TTL:
+            return cached[1]
+        items = await self.ma.children(uri)
+        self._children[uri] = (time.monotonic(), items)
+        return items
+
+    async def find_allowed_item(self, uri: str) -> MaItem | None:
+        """Return the item if it is an allowed container or one of their children."""
+        if self.now_playing is not None and self.now_playing.uri == uri:
+            return self.now_playing
+        containers = self.allowed()
+        if uri in containers:
+            try:
+                return await self.ma.item(uri)
+            except InvalidRequest:
+                return None
+        results = await asyncio.gather(
+            *(self.children(c) for c in containers), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                if isinstance(result, InvalidRequest):
+                    continue
+                raise result
+            for child in result:
+                if child.uri == uri:
+                    return child
+        return None
+
+    async def is_allowed_item(self, uri: str) -> bool:
+        """Return whether ``uri`` may be rated/played on this device."""
+        return await self.find_allowed_item(uri) is not None
+
+    # -- items ------------------------------------------------------------
+
+    def _progress(self, uri: str, duration_ms: int) -> dict[str, Any]:
+        rec = self.device.store.get_progress(uri)
+        if rec is None:
+            return {"position_ms": 0, "duration_ms": duration_ms, "finished": False}
+        return {
+            "position_ms": rec.position_ms,
+            "duration_ms": rec.duration_ms,
+            "finished": rec.finished,
+        }
+
+    def to_item(self, it: MaItem, size: int = 256) -> dict[str, Any]:
+        """Convert an ``MaItem`` to a protocol Item."""
+        item: dict[str, Any] = {
+            "uri": it.uri,
+            "kind": it.kind,
+            "title": it.title,
+            "subtitle": it.subtitle,
+            "image_url": image_url(it.image, size),
+            "stars": self.device.store.get_rating(it.uri),
+        }
+        if it.kind in PROGRESS_KINDS:
+            item["progress"] = self._progress(it.uri, it.duration_ms)
+        return item
+
+    def _favorites_tile(self, kind: str) -> dict[str, Any]:
+        return {
+            "uri": f"{FAVORITES_PREFIX}{kind}",
+            "kind": "favorites",
+            "title": "Favoriten",
+            "subtitle": "",
+            "image_url": None,
+            "stars": None,
+        }
+
+    def favorites(self, kind: str) -> list[dict[str, Any]]:
+        """Return the rated items of ``kind`` with at least four stars."""
+        kinds = FAVORITE_KINDS.get(kind)
+        if kinds is None:
+            raise InvalidRequest("kind must be track, episode or audiobook")
+        items = []
+        for rec in self.device.store.ratings():
+            if rec.kind not in kinds or rec.stars < FAVORITES_MIN_STARS:
+                continue
+            item: dict[str, Any] = {
+                "uri": rec.uri,
+                "kind": rec.kind,
+                "title": rec.title,
+                "subtitle": rec.subtitle,
+                "image_url": rec.image_url,
+                "stars": rec.stars,
+            }
+            if rec.kind in PROGRESS_KINDS:
+                item["progress"] = self._progress(rec.uri, 0)
+            items.append(item)
+        return items
+
+    # -- handlers ---------------------------------------------------------
+
+    async def _handle_browse(self, msg: dict[str, Any]) -> dict[str, Any]:
+        section = msg.get("section")
+        sort = msg.get("sort", "default")
+        parent = msg.get("parent_uri")
+        if section not in SECTIONS:
+            raise InvalidRequest("section must be music, audiobooks or podcasts")
+        if sort not in SORTS:
+            raise InvalidRequest("sort must be default or stars")
+        if parent is not None and not isinstance(parent, str):
+            raise InvalidRequest("parent_uri must be a string")
+        if parent is not None and parent.startswith(FAVORITES_PREFIX):
+            return {"items": self.favorites(parent.removeprefix(FAVORITES_PREFIX))}
+        if parent is None:
+            return {"items": await self._browse_root(section)}
+        if parent not in self.allowed(section):
+            raise NotAllowed("content not allowed")
+        children = await self.children(parent, fresh=True)
+        items = [self.to_item(c) for c in children]
+        if any(c.kind == "episode" for c in children):
+            for item, child in zip(items, children, strict=True):
+                item["_published"] = (
+                    child.published if child.published is not None else float("-inf")
+                )
+            return {"items": sort_episodes(items, sort)}
+        return {"items": sort_tracks(items, sort)}
+
+    async def _browse_root(self, section: str) -> list[dict[str, Any]]:
+        _, kinds, fav_kind = SECTIONS[section]
+        allowed = set(self.allowed(section))
+        libraries = await asyncio.gather(*(self.ma.library(k) for k in kinds))
+        items: list[dict[str, Any]] = []
+        if self.favorites(fav_kind):
+            items.append(self._favorites_tile(fav_kind))
+        seen: set[str] = set()
+        for library in libraries:
+            for it in library:
+                if it.uri in allowed and it.uri not in seen:
+                    seen.add(it.uri)
+                    items.append(self.to_item(it))
+        return items
+
+    async def _handle_favorites(self, msg: dict[str, Any]) -> dict[str, Any]:
+        kind = msg.get("kind")
+        if not isinstance(kind, str):
+            raise InvalidRequest("kind must be a string")
+        return {"items": self.favorites(kind)}
+
+    async def _handle_rate(self, msg: dict[str, Any]) -> dict[str, Any]:
+        uri = msg.get("uri")
+        kind = msg.get("kind")
+        stars = msg.get("stars")
+        if not isinstance(uri, str) or not uri:
+            raise InvalidRequest("uri must be a string")
+        if kind not in RATE_KINDS:
+            raise InvalidRequest("unsupported kind")
+        if isinstance(stars, bool) or not isinstance(stars, int) or not 1 <= stars <= 5:
+            raise InvalidRequest("stars must be an integer 1..5")
+        found = await self.find_allowed_item(uri)
+        if found is None:
+            raise NotAllowed("content not allowed")
+        self.device.store.set_rating(
+            uri,
+            kind,
+            stars,
+            found.title,
+            found.subtitle,
+            image_url(found.image),
+        )
+        self.device.notify()
+        return {}
