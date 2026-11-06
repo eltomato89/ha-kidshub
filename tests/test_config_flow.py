@@ -96,3 +96,29 @@ async def test_pairing_timeout(hass: HomeAssistant, monkeypatch) -> None:
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "pairing_timeout"
     assert not hass.data[DOMAIN].pairing._pending
+
+
+async def test_flow_aborts_too_many_attempts(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "device"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"child_name": "Paul"}
+    )
+    code = result["description_placeholders"]["code"]
+    client = await hass_client_no_auth()
+    wrong = "000000" if code != "000000" else "111111"
+    for _ in range(10):
+        assert (
+            await client.post("/api/kidshub/pair", json={"code": wrong})
+        ).status == 403
+    assert (await client.post("/api/kidshub/pair", json={"code": code})).status == 403
+    await hass.async_block_till_done()
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "too_many_attempts"

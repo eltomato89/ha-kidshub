@@ -67,3 +67,55 @@ async def test_pair_expired(hass: HomeAssistant, hass_client_no_auth, freezer) -
     freezer.tick(timedelta(seconds=601))
     resp = await client.post("/api/kidshub/pair", json={"code": pending.code})
     assert resp.status == 403
+
+
+async def test_pair_no_store_header(hass: HomeAssistant, hass_client_no_auth) -> None:
+    assert await async_setup_component(hass, DOMAIN, {})
+    client = await hass_client_no_auth()
+    resp = await client.post("/api/kidshub/pair", json={"code": "000000"})
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+async def test_pair_lockout_after_10_failures(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    assert await async_setup_component(hass, DOMAIN, {})
+    pending = hass.data[DOMAIN].pairing.start("Paul")
+    client = await hass_client_no_auth()
+    for _ in range(10):
+        resp = await client.post("/api/kidshub/pair", json={"code": "x"})
+        assert resp.status == 403
+    resp = await client.post("/api/kidshub/pair", json={"code": pending.code})
+    assert resp.status == 403
+    assert pending.aborted
+
+
+async def test_pair_nine_failures_then_success(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    assert await async_setup_component(hass, DOMAIN, {})
+    pending = hass.data[DOMAIN].pairing.start("Paul")
+    client = await hass_client_no_auth()
+    for _ in range(9):
+        await client.post("/api/kidshub/pair", data="nope")
+    resp = await client.post("/api/kidshub/pair", json={"code": pending.code})
+    assert resp.status == 200
+
+
+async def test_start_resets_failures() -> None:
+    reg = PairingRegistry()
+    reg.start("A")
+    for _ in range(9):
+        reg.register_failure()
+    second = reg.start("B")
+    reg.register_failure()
+    assert not second.aborted
+    assert await reg.complete(second.code, "1") is not None
+
+
+async def test_no_pending_no_counting() -> None:
+    reg = PairingRegistry()
+    for _ in range(20):
+        assert await reg.complete("000000", "1") is None
+    pending = reg.start("A")
+    assert await reg.complete(pending.code, "1") is not None

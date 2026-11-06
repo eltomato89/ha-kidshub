@@ -30,7 +30,8 @@
     },
     "abort": {
       "already_configured": "The settings already exist.",
-      "pairing_timeout": "Pairing timed out. Please try again."
+      "pairing_timeout": "Pairing timed out. Please try again.",
+      "too_many_attempts": "Too many wrong codes - please restart pairing."
     }
   }
 }

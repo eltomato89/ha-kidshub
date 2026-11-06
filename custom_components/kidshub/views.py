@@ -10,6 +10,8 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
 
+NO_STORE = {"Cache-Control": "no-store"}
+
 
 class PairView(HomeAssistantView):
     """Pair a device with a code (protocol 2.1)."""
@@ -20,15 +22,21 @@ class PairView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Complete a pending pairing."""
-        invalid = self.json({"error": "invalid_code"}, HTTPStatus.FORBIDDEN)
+        registry = request.app["hass"].data[DOMAIN].pairing
+        invalid = self.json(
+            {"error": "invalid_code"},
+            HTTPStatus.FORBIDDEN,
+            headers=NO_STORE,
+        )
         try:
             body: Any = await request.json()
         except ValueError:
+            registry.register_failure()
             return invalid
         if not isinstance(body, dict) or not isinstance(body.get("code"), str):
+            registry.register_failure()
             return invalid
         app_version = body.get("app_version")
-        registry = request.app["hass"].data[DOMAIN].pairing
         result = await registry.complete(
             body["code"], app_version if isinstance(app_version, str) else ""
         )
@@ -40,5 +48,6 @@ class PairView(HomeAssistantView):
                 "device_id": pending.device_id,
                 "token": token,
                 "child_name": pending.child_name,
-            }
+            },
+            headers=NO_STORE,
         )

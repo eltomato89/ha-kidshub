@@ -30,7 +30,8 @@
     },
     "abort": {
       "already_configured": "Die Einstellungen sind bereits angelegt.",
-      "pairing_timeout": "Die Kopplung ist abgelaufen. Bitte erneut versuchen."
+      "pairing_timeout": "Die Kopplung ist abgelaufen. Bitte erneut versuchen.",
+      "too_many_attempts": "Zu viele falsche Codes – bitte Kopplung neu starten"
     }
   }
 }

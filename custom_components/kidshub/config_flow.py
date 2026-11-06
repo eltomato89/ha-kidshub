@@ -116,6 +116,8 @@ class KidsHubConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Create the device entry after a successful pairing."""
         pending = self._pending
+        if pending is not None and pending.aborted:
+            return self.async_abort(reason="too_many_attempts")
         if pending is None or not pending.done.is_set():
             return self.async_abort(reason="pairing_timeout")
         await self.async_set_unique_id(pending.device_id)

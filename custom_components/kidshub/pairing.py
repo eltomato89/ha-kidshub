@@ -10,6 +10,7 @@ import time
 import uuid
 
 PAIRING_TTL = 600
+MAX_FAILED_ATTEMPTS = 10
 
 
 @dataclass
@@ -23,6 +24,7 @@ class PendingPairing:
     done: asyncio.Event = field(default_factory=asyncio.Event)
     token_hash: str | None = None
     app_version: str | None = None
+    aborted: bool = False
 
 
 class PairingRegistry:
@@ -30,6 +32,7 @@ class PairingRegistry:
 
     def __init__(self) -> None:
         self._pending: dict[str, PendingPairing] = {}
+        self._failures = 0
 
     def _purge(self) -> None:
         now = time.time()
@@ -39,6 +42,7 @@ class PairingRegistry:
     def start(self, child_name: str) -> PendingPairing:
         """Open a new pairing with a code unique among the open ones."""
         self._purge()
+        self._failures = 0
         while True:
             code = f"{secrets.randbelow(1_000_000):06d}"
             if code not in self._pending:
@@ -59,12 +63,25 @@ class PairingRegistry:
         self._purge()
         pending = self._pending.pop(code, None)
         if pending is None:
+            self.register_failure()
             return None
         token = secrets.token_urlsafe(32)
         pending.token_hash = hashlib.sha256(token.encode()).hexdigest()
         pending.app_version = app_version
         pending.done.set()
         return pending, token
+
+    def register_failure(self) -> None:
+        """Count a failed attempt; too many invalidate all open pairings."""
+        self._purge()
+        if not self._pending:
+            return
+        self._failures += 1
+        if self._failures >= MAX_FAILED_ATTEMPTS:
+            for pending in self._pending.values():
+                pending.aborted = True
+                pending.done.set()
+            self._pending.clear()
 
     def cancel(self, code: str) -> None:
         """Drop an open pairing."""
