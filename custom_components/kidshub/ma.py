@@ -10,7 +10,7 @@ queue/music/player API) with the MA 2.10.9 add-on (``scripts/ma_probe.py``):
   (``MusicAssistantEntryData.mass``, a ``MusicAssistantClient``); connection state via
   ``mass.connection.connected``. ``entry.data["url"]`` of the add-on is the container
   host from hassio discovery (``http://<slug>-music-assistant:8094``, not reachable from
-  the LAN); ``mass.server_info.base_url`` is MA's LAN address and is preferred.
+  the LAN); ``mass.server_info.base_url`` is MA's LAN address and is used instead.
 - Library: ``mass.music.get_library_playlists/_albums/_audiobooks/_podcasts(limit=, offset=)``.
 - Children: ``mass.music.get_playlist_tracks(item_id, provider)``,
   ``get_album_tracks(item_id, provider)``, ``get_podcast_episodes(item_id, provider)``.
@@ -312,19 +312,18 @@ class MaAdapter:
     # -- sendspin / players ---------------------------------------------
 
     def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
-        """Return the ``config.sendspin`` block, ``None`` without an MA entry.
+        """Return the ``config.sendspin`` block, ``None`` without a connected MA.
 
-        The host is taken from MA's own ``base_url`` (what MA tells its players);
-        the entry URL of the add-on is the container host (hassio discovery,
-        e.g. ``http://d5369777-music-assistant:8094``), which the app cannot
-        resolve. It is only the fallback while MA is not connected.
+        The host is taken from MA's own ``base_url`` (what MA tells its players).
+        The entry URL is never used: for the add-on it is the container host
+        (hassio discovery, e.g. ``http://d5369777-music-assistant:8094``), which
+        the app cannot resolve. The block is pushed again on MA entry changes.
         """
-        entries = self.hass.config_entries.async_entries(MA_DOMAIN)
-        if not entries:
+        try:
+            mass, _ = self._client()
+        except MaUnavailable:
             return None
-        loaded = self._loaded_entry()
-        mass = getattr(getattr(loaded, "runtime_data", None), "mass", None)
-        url = _base_url(mass) or (loaded or entries[0]).data.get("url")
+        url = _base_url(mass)
         host = urlparse(str(url or "")).hostname
         if not host:
             return None

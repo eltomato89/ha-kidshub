@@ -951,3 +951,20 @@ async def test_play_without_progress_seeks_one_second(
     assert (await _request(ws, 4, "play", uris=[TRACK_A.uri]))["success"]
     assert [c[3] for c in fake.play_calls] == [1000, 1000, 0, 0]
     await ws.close()
+
+
+async def test_wake_play_hoerspiel_seeks_one_second(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """R24 for wake music: audiobook/episode/podcast start at 1 s, music at 0."""
+    fake = _fake()
+    entry = await _setup(hass, fake, {**OPTIONS, "wake_media_uri": BOOK.uri})
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "wake_play"))["success"]
+    hass.config_entries.async_update_entry(
+        entry, options={**OPTIONS, "wake_media_uri": POD.uri}
+    )
+    await hass.async_block_till_done()
+    assert (await _request(ws, 2, "wake_play"))["success"]
+    assert fake.play_calls == [(PLAYER, [BOOK.uri], 0, 1000), (PLAYER, [POD.uri], 0, 1000)]
+    await ws.close()

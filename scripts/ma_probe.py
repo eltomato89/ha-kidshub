@@ -4,9 +4,12 @@ Checks the assumptions of ``custom_components/kidshub/ma.py`` and ``playback.py`
 against a real HA + MA installation, using only the HA websocket/REST API with an
 admin long-lived token read from a file (never printed).
 
+    export KIDSHUB_HA_URL=http://192.168.1.10:8123 KIDSHUB_MA_URL=http://192.168.1.10:8095
     .venv/bin/python -I scripts/ma_probe.py                      # read-only checks
     .venv/bin/python -I scripts/ma_probe.py --play               # + playback tests
     .venv/bin/python -I scripts/ma_probe.py --tts                # + TTS format test
+
+``--ha``/``--ma`` (or ``KIDSHUB_HA_URL``/``KIDSHUB_MA_URL``) are required.
 
 ``--play`` plays, seeks, clears and stops media **only** on the MA player named by
 ``--player`` (default ``KidsHub Test``) at volume ``--volume`` and stops it afterwards.
@@ -442,8 +445,16 @@ async def probe_tts(ha: Ha, render: list[str]) -> None:
 
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--ha", default="http://172.20.60.100:8123")
-    ap.add_argument("--ma", default="http://172.20.60.100:8095", help="MA base URL for /info")
+    ap.add_argument(
+        "--ha",
+        default=os.environ.get("KIDSHUB_HA_URL"),
+        help="HA URL, e.g. http://192.168.1.10:8123 (env KIDSHUB_HA_URL)",
+    )
+    ap.add_argument(
+        "--ma",
+        default=os.environ.get("KIDSHUB_MA_URL"),
+        help="MA base URL for /info, e.g. http://192.168.1.10:8095 (env KIDSHUB_MA_URL)",
+    )
     ap.add_argument("--token-file", default="~/.kidshub_ha_token")
     ap.add_argument("--player", default="KidsHub Test", help="MA player name used by --play")
     ap.add_argument("--volume", type=float, default=0.05)
@@ -451,7 +462,7 @@ async def main() -> None:
     ap.add_argument(
         "--sendspin",
         metavar="URL",
-        help="connect a minimal Sendspin player (e.g. ws://172.20.60.100:8927/sendspin) "
+        help="connect a minimal Sendspin player (e.g. ws://192.168.1.10:8927/sendspin) "
         "as --client-id/--player for the playback tests (audio is discarded)",
     )
     ap.add_argument("--client-id", default="kidshub-test")
@@ -463,6 +474,8 @@ async def main() -> None:
         help="render one phrase with these TTS entities (default tts.google_ai_tts)",
     )
     args = ap.parse_args()
+    if not args.ha or not args.ma:
+        ap.error("--ha and --ma (or KIDSHUB_HA_URL / KIDSHUB_MA_URL) are required")
     with open(os.path.expanduser(args.token_file), encoding="utf-8") as f:
         token = f.read().strip()
     async with Ha(args.ha, token) as ha:

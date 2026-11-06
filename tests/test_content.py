@@ -217,11 +217,18 @@ async def test_image_url_rewritten(hass: HomeAssistant, hass_client_no_auth) -> 
 
 
 async def test_sendspin_info(hass: HomeAssistant, hass_client_no_auth) -> None:
+    from types import SimpleNamespace
+
     adapter = MaAdapter(hass)
     assert adapter.sendspin_info("abc", "Paul") is None
+    # an entry alone is not enough: its URL may be the add-on container host
     MockConfigEntry(
         domain="music_assistant", data={"url": "http://192.168.1.10:8095"}
     ).add_to_hass(hass)
+    assert adapter.sendspin_info("abc", "Paul") is None
+    mass = _fake_client()
+    mass.server_info = SimpleNamespace(base_url="http://192.168.1.10:8095")
+    _loaded_ma_entry(hass, mass, url="http://d5369777-music-assistant:8094")
     info = adapter.sendspin_info("abc", "Paul")
     assert info == {
         "url": "ws://192.168.1.10:8927/sendspin",
@@ -608,15 +615,22 @@ async def test_sendspin_info_uses_ma_base_url(hass: HomeAssistant) -> None:
     """The add-on entry URL is the container host (hassio discovery), not the LAN IP.
 
     Live: discovery gives ``http://d5369777-music-assistant:8094``, MA's
-    ``server_info.base_url`` is ``http://172.20.60.100:8095``.
+    ``server_info.base_url`` is ``http://192.168.1.10:8095``.
     """
     from types import SimpleNamespace
 
     mass = _fake_client()
-    mass.server_info = SimpleNamespace(base_url="http://172.20.60.100:8095")
+    mass.server_info = SimpleNamespace(base_url="http://192.168.1.10:8095")
     _loaded_ma_entry(hass, mass, url="http://d5369777-music-assistant:8094")
-    info = MaAdapter(hass).sendspin_info("abc", "Paul")
-    assert info["url"] == "ws://172.20.60.100:8927/sendspin"
+    adapter = MaAdapter(hass)
+    info = adapter.sendspin_info("abc", "Paul")
+    assert info["url"] == "ws://192.168.1.10:8927/sendspin"
+    # no base_url (not connected / no server info): no sendspin block at all
+    mass.connection.connected = False
+    assert adapter.sendspin_info("abc", "Paul") is None
+    mass.connection.connected = True
+    mass.server_info = None
+    assert adapter.sendspin_info("abc", "Paul") is None
 
 
 def test_snapshot_container_only_for_containers() -> None:

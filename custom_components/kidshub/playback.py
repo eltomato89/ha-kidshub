@@ -42,6 +42,7 @@ FINISHED_MARGIN_MS = 30000
 RETRY_DELAYS = (1, 2, 5, 10, 30, 60)  # seconds, queue subscription backoff
 FROM_START_SEEK_MS = 1000  # MA treats seek 0 as "resume at MA's own position"
 FROM_START_KINDS = {"album", "episode", "audiobook"}
+WAKE_FROM_START_TYPES = {"audiobook", "podcast_episode", "podcast"}  # MA media types
 
 MUSIC_KINDS = {"track", "playlist"}
 CONTAINER_KINDS = {"playlist", "album", "podcast"}
@@ -70,6 +71,11 @@ class _Current:
     index: int  # queue index
     elapsed_ms: int
     playing: bool
+
+
+def _media_type(uri: str) -> str:
+    """Return the media type of an MA URI (``{provider}://{media_type}/{id}``)."""
+    return uri.partition("://")[2].partition("/")[0]
 
 
 def _is_int(value: Any) -> bool:
@@ -376,9 +382,11 @@ class PlaybackService:
             raise InvalidRequest("no wake-up music configured")
         if uri not in self.content.allowed():
             raise NotAllowed("wake-up music is not allowed")
+        # R24: MA resumes audiobooks/episodes at its own position at seek 0
+        seek_ms = FROM_START_SEEK_MS if _media_type(uri) in WAKE_FROM_START_TYPES else 0
         try:
             async with asyncio.timeout(WAKE_PLAY_TIMEOUT):
-                await self._play([uri], 0, None, 0)
+                await self._play([uri], 0, None, seek_ms)
         except TimeoutError as err:
             self._request_resubscribe()
             raise MaUnavailable("Music Assistant did not start in time") from err

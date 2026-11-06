@@ -76,7 +76,7 @@ Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit B
 ```
 `sendspin.url` leitet die Integration aus der von MA selbst gemeldeten Basis-Adresse ab (`/info` → `base_url`; Host, Port
 `8927`, Pfad `/sendspin`), nicht aus der Entry-URL (die kann ein Container-Name sein). Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
-Sendspin-Client-ID; MA führt den Player unter genau dieser ID.
+Sendspin-Client-ID (MA vergibt eine eigene `player_id`, siehe §3.3).
 
 `kind` ∈ `switch` | `dimmer` | `cover` | `color`.
 Die Zuordnung macht die Integration: `light` mit Farbmodus `hs`/`rgb*`/`xy` → `color`,
