@@ -12,6 +12,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
+from .alarm_extras import AlarmExtras
 from .const import (
     CONF_DEVICE_ID,
     DOMAIN,
@@ -41,6 +42,7 @@ class KidsHubData:
     ma: MaAdapter | None = None  # set in async_setup; tests inject a fake
     images: ImageRegistry = field(default_factory=ImageRegistry)  # emitted image URLs
     tts: TtsCache | None = None  # created in async_setup (needs hass)
+    extras: dict[str, AlarmExtras] = field(default_factory=dict)  # entry_id ->
 
 
 def async_get_data(hass: HomeAssistant) -> KidsHubData:
@@ -99,6 +101,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bridge.start()
         entry.async_on_unload(bridge.stop)
         entry.runtime_data = bridge
+        extras = AlarmExtras(hass, device)
+        extras.start()
+        data.extras[entry.entry_id] = extras
+        entry.async_on_unload(extras.stop)
         entry.async_on_unload(entry.add_update_listener(_async_options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -112,6 +118,9 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
         return
     await device.push_config()
     await bridge.refresh()
+    extras = hass.data[DOMAIN].extras.get(entry.entry_id)
+    if extras is not None:
+        extras.refresh()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -120,6 +129,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        hass.data[DOMAIN].extras.pop(entry.entry_id, None)
         device = hass.data[DOMAIN].devices.pop(entry.data[CONF_DEVICE_ID], None)
         if device is not None:
             await device.async_close()
