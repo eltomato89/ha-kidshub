@@ -197,6 +197,7 @@ async def test_non_finite_sleep_remaining(hass, hass_client_no_auth) -> None:
         ("-Infinity", "ringing"),
         ("NaN", "stopped"),
         ("1e30", "off"),
+        ("1" + "0" * 400, "sunrise"),
     ):
         await ws.send_str(
             '{"type":"state","alarm_state":"%s","sleep_remaining_s":%s}'

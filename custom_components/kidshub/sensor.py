@@ -69,7 +69,9 @@ class SleepRemainingSensor(KidEntity, SensorEntity):
         value = self.state_data.get("sleep_remaining_s")
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
-        if not math.isfinite(value) or not 0 <= value <= MAX_SLEEP_REMAINING_S:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if not 0 <= value <= MAX_SLEEP_REMAINING_S:
             return None
         return int(value)
 
