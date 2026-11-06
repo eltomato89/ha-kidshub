@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import io
+import os
 import tempfile
 from unittest.mock import patch
 
@@ -10,7 +11,7 @@ import pytest
 from aiohttp import web
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from PIL import Image
+from PIL import Image, ImageFile
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.kidshub import images as images_module
@@ -74,7 +75,29 @@ async def source(aiohttp_server):
         hits["n"] += 1
         return web.Response(body=b"\0" * 2048, content_type="image/png")
 
+    async def chunked(request):
+        hits["n"] += 1
+        resp = web.StreamResponse()
+        resp.enable_chunked_encoding()
+        await resp.prepare(request)
+        for _ in range(4):
+            await resp.write(b"\0" * 512)
+        return resp
+
+    async def bomb(request):
+        hits["n"] += 1
+        buf = io.BytesIO()
+        Image.new("L", (6000, 6000)).save(buf, "PNG", compress_level=9)
+        return web.Response(body=buf.getvalue(), content_type="image/png")
+
+    async def eps(request):
+        hits["n"] += 1
+        return web.Response(body=b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n")
+
     app = web.Application()
+    app.router.add_get("/chunked.png", chunked)
+    app.router.add_get("/bomb.png", bomb)
+    app.router.add_get("/x.eps", eps)
     app.router.add_get("/a.png", png)
     app.router.add_get("/r.png", redirect)
     app.router.add_get("/huge.png", huge)
@@ -174,6 +197,51 @@ async def test_image_too_large(
     assert resp.status == 502
 
 
+async def test_image_chunked_too_large(
+    hass: HomeAssistant, hass_client_no_auth, source, monkeypatch
+) -> None:
+    monkeypatch.setattr(images_module, "MAX_BYTES", 1024)
+    data = await _setup(hass)
+    url = _url(source, "/chunked.png")
+    data.images.add(url)
+    client = await hass_client_no_auth()
+    resp = await client.get("/api/kidshub/img", params={"u": url, "s": "64"}, headers=AUTH)
+    assert resp.status == 502
+
+
+@pytest.mark.parametrize("path", ["/bomb.png", "/x.eps"])
+async def test_image_rejected_without_decode(
+    hass: HomeAssistant, hass_client_no_auth, source, path
+) -> None:
+    data = await _setup(hass)
+    url = _url(source, path)
+    data.images.add(url)
+    client = await hass_client_no_auth()
+    with patch.object(ImageFile.ImageFile, "load", autospec=True) as load:
+        resp = await client.get(
+            "/api/kidshub/img", params={"u": url, "s": "64"}, headers=AUTH
+        )
+    assert resp.status == 502
+    load.assert_not_called()  # rejected from the header, never fully decoded
+
+
+async def test_image_concurrent_single_fetch(
+    hass: HomeAssistant, hass_client_no_auth, source
+) -> None:
+    data = await _setup(hass)
+    url = _url(source, "/a.png")
+    data.images.add(url)
+    client = await hass_client_no_auth()
+    rs = await asyncio.gather(
+        *[
+            client.get("/api/kidshub/img", params={"u": url, "s": "64"}, headers=AUTH)
+            for _ in range(4)
+        ]
+    )
+    assert [r.status for r in rs] == [200] * 4
+    assert source.hits["n"] == 1
+
+
 async def test_image_lru_bounded(hass: HomeAssistant) -> None:
     cache = images_module.ScaledCache(maxsize=2)
     cache.put(("a", 64), b"1")
@@ -246,7 +314,7 @@ async def test_tts_key_per_protocol(hass: HomeAssistant) -> None:
         '|'.join(["tts.fake", "de-DE", '{"voice":"x"}', "Hallo"]).encode()
     ).hexdigest()
     assert res["url"] == f"/api/kidshub/tts/{key}.mp3"
-    assert (hass.config.path("kidshub_tts") + f"/{key}.mp3")
+    assert os.path.isfile(hass.config.path("kidshub_tts") + f"/{key}.mp3")
 
 
 async def test_tts_concurrent_single_generation(hass: HomeAssistant) -> None:
