@@ -183,3 +183,25 @@ async def test_stop_alarm_button(hass, hass_client_no_auth) -> None:
     )
     assert await ws.receive_json() == {"type": "sleep_cmd", "cmd": "cancel"}
     await ws.close()
+
+
+async def test_non_finite_sleep_remaining(hass, hass_client_no_auth) -> None:
+    await _setup(hass)
+    ws = await _connect(hass, hass_client_no_auth)
+    sleep = "sensor.kidshub_paul_sleep_remaining"
+    alarm = "sensor.kidshub_paul_alarm_state"
+    await ws.send_json({"type": "state", "alarm_state": "off", "sleep_remaining_s": 60})
+    await _wait_state(hass, sleep, "60")
+    for raw, alarm_state in (
+        ("Infinity", "sunrise"),
+        ("-Infinity", "ringing"),
+        ("NaN", "stopped"),
+        ("1e30", "off"),
+    ):
+        await ws.send_str(
+            '{"type":"state","alarm_state":"%s","sleep_remaining_s":%s}'
+            % (alarm_state, raw)
+        )
+        await _wait_state(hass, alarm, alarm_state)
+        assert hass.states.get(sleep).state == "unknown", raw
+    await ws.close()

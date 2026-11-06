@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -18,6 +19,7 @@ from .entity import KidEntity
 
 ALARM_STATES = ["off", "sunrise", "ringing", "stopped"]
 TOP_RATED_MIN_STARS = 4
+MAX_SLEEP_REMAINING_S = 86400
 TOP_RATED_MAX_ITEMS = 20
 
 
@@ -67,7 +69,7 @@ class SleepRemainingSensor(KidEntity, SensorEntity):
         value = self.state_data.get("sleep_remaining_s")
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
-        if value != value or value < 0:  # NaN or negative
+        if not math.isfinite(value) or not 0 <= value <= MAX_SLEEP_REMAINING_S:
             return None
         return int(value)
 
