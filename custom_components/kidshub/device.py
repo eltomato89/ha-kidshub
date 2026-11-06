@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import hmac
@@ -199,9 +200,17 @@ class KidDevice:
         self._connected_callbacks.append(callback)
 
     async def on_connected(self) -> None:
-        """Run the connected callbacks (called by the session after ``config``)."""
+        """Run the connected callbacks (called by the session after ``config``).
+
+        A failing callback is logged; it must not end the session.
+        """
         for callback in list(self._connected_callbacks):
-            await callback()
+            try:
+                await callback()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("Connected callback %s failed", callback)
 
     async def handle_request(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a request to its handler."""

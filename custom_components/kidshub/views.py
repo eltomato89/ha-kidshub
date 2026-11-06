@@ -67,8 +67,8 @@ class WsView(HomeAssistantView):
         """Upgrade to a WebSocket and serve the session."""
         ws = web.WebSocketResponse(heartbeat=HEARTBEAT, max_msg_size=MAX_MSG_SIZE)
         await ws.prepare(request)
-        devices = request.app["hass"].data[DOMAIN].devices
-        await WsSession(ws, devices).run()
+        hass = request.app["hass"]
+        await WsSession(ws, hass.data[DOMAIN].devices, hass).run()
         return ws
 
 

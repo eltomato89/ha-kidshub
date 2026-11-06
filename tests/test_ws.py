@@ -425,3 +425,61 @@ async def test_push_on_dead_transport_does_not_raise(
     await device.push({"type": "config"})
     await device.update_settings({"max_volume": 40})
     await ws.close()
+
+
+async def _closed_without_auth_invalid(ws) -> None:
+    msg = await asyncio.wait_for(ws.receive(), 2)
+    assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED), msg
+    await ws.close()
+    await asyncio.sleep(0.05)
+
+
+@lingering_heartbeat
+async def test_auth_known_entry_not_loaded_closes_without_invalid(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """Reload/startup race: entry exists, token matches, device not loaded."""
+    entry = await _setup(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert "dev-a" not in hass.data[DOMAIN].devices
+    ws = await _auth(await hass_client_no_auth())
+    await _closed_without_auth_invalid(ws)
+
+
+@lingering_heartbeat
+async def test_auth_known_entry_not_loaded_wrong_token_is_invalid(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    entry = await _setup(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    ws = await _auth(await hass_client_no_auth(), token="nope")
+    assert (await ws.receive_json()) == {"type": "auth_invalid"}
+    await _closed_by_server(ws)
+
+
+async def test_failing_connected_callback_is_logged_not_fatal(
+    hass: HomeAssistant, hass_client_no_auth, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _setup(hass)
+    device = hass.data[DOMAIN].devices["dev-a"]
+    ran: list[str] = []
+
+    async def boom() -> None:
+        raise RuntimeError("boom")
+
+    async def after() -> None:
+        ran.append("after")
+
+    device._connected_callbacks.insert(0, boom)
+    device.register_connected_callback(after)
+    ws = await _auth(await hass_client_no_auth())
+    assert (await ws.receive_json())["type"] == "auth_ok"
+    assert (await ws.receive_json())["type"] == "config"
+    await ws.send_json({"type": "foo", "id": 7})
+    while (msg := await asyncio.wait_for(ws.receive_json(), 2))["type"] != "result":
+        pass
+    assert msg["id"] == 7
+    assert ran == ["after"]
+    assert device.connected
+    assert "boom" in caplog.text
+    await ws.close()

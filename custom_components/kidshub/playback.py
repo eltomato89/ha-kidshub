@@ -108,7 +108,10 @@ class PlaybackService:
         self._task: asyncio.Task[None] | None = None
         self._retry = asyncio.Event()
         self._play_lock = asyncio.Lock()
-        self._album: _Album | None = None
+        # Persisted so that the album's tracks are still recognized as a
+        # Hörspiel after an HA restart (the queue holds plain track URIs).
+        ctx = device.store.album_context
+        self._album: _Album | None = _Album(*ctx) if ctx else None
         self._current: _Current | None = None
         self._last_push = float("-inf")
         self._last_save = float("-inf")
@@ -194,6 +197,10 @@ class PlaybackService:
     def _on_entry_changed(self, change: ConfigEntryChange, entry: ConfigEntry) -> None:
         if entry.domain == MA_DOMAIN:
             self._request_resubscribe()
+            # config.sendspin depends on the MA entry (added/removed/reloaded)
+            self.hass.async_create_task(
+                self.device.push_config(), f"kidshub ma config {self.device.device_id}"
+            )
 
     async def _on_connected(self) -> None:
         if self._unsub_queue is None:
@@ -314,6 +321,10 @@ class PlaybackService:
                 self._album = previous
                 self._request_resubscribe()
                 raise
+            if album is not None:
+                self.device.store.set_album_context(album.uri, album.tracks)
+            else:
+                self.device.store.set_album_context(None)
 
     def _music_blocked(self) -> bool:
         """Return whether music is disabled and the queue holds music."""
@@ -375,13 +386,14 @@ class PlaybackService:
             kind, container, progress_uri = "album_track", album.uri, album.uri
             track_index = album.tracks.index(it.uri)
             is_last = track_index == len(album.tracks) - 1
-        elif (
-            kind == "track"
-            and container is not None
-            and "://album/" in container
-            and container in self.content.allowed("audiobooks")
-        ):
+        elif kind == "track" and self._allowed_album(container):
             # album started elsewhere (e.g. MA UI): queue index = album index
+            kind, progress_uri, track_index = "album_track", container, snap.index
+        elif kind == "track" and self._allowed_album(it.album_uri):
+            # no album context (e.g. queue built elsewhere): the track's own
+            # album decides; its album index is unknown, the queue index is
+            # the best guess
+            container = it.album_uri
             kind, progress_uri, track_index = "album_track", container, snap.index
         elif kind in ("episode", "audiobook"):
             progress_uri = it.uri
@@ -395,6 +407,14 @@ class PlaybackService:
             index=snap.index,
             elapsed_ms=max(0, snap.elapsed_ms),
             playing=snap.playing,
+        )
+
+    def _allowed_album(self, uri: str | None) -> bool:
+        """Return whether ``uri`` is an album on the Hörspiel allowlist."""
+        return (
+            uri is not None
+            and "://album/" in uri
+            and uri in self.content.allowed("audiobooks")
         )
 
     @callback

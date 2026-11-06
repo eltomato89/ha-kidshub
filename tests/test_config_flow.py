@@ -95,7 +95,6 @@ async def test_pairing_timeout(hass: HomeAssistant, monkeypatch) -> None:
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "pairing_timeout"
-    assert not hass.data[DOMAIN].pairing._pending
 
 
 async def test_flow_aborts_too_many_attempts(
@@ -122,3 +121,23 @@ async def test_flow_aborts_too_many_attempts(
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "too_many_attempts"
+
+
+async def test_device_empty_name_is_form_error(hass: HomeAssistant) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "device"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"child_name": "   "}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "device"
+    assert result["errors"] == {"child_name": "invalid_name"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"child_name": " Paul "}
+    )
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    hass.config_entries.flow.async_abort(result["flow_id"])

@@ -23,14 +23,20 @@ _IGNORED = {"unavailable", "unknown"}
 SUNRISE_TRANSITION = 15
 
 
-def _alarm_state(state: Any) -> tuple[str, float] | None:
-    """Validate the untrusted app ``state`` and return (alarm_state, progress)."""
+def _alarm_state(state: Any) -> tuple[str, float | None] | None:
+    """Validate the untrusted app ``state`` and return (alarm_state, progress).
+
+    ``sunrise_progress`` is only required (finite, 0..1) in ``sunrise``; the app
+    omits it in ``off``/``stopped`` and may omit it in ``ringing`` (protocol 3.3).
+    """
     if not isinstance(state, dict):
         return None
     alarm = state.get("alarm_state")
     if not isinstance(alarm, str) or alarm not in _ALARM_STATES:
         return None
     progress = state.get("sunrise_progress")
+    if progress is None and alarm != "sunrise":
+        return alarm, None
     if (
         isinstance(progress, bool)
         or not isinstance(progress, (int, float))
@@ -75,7 +81,8 @@ class AlarmExtras:
         self._unsub_signal = self._unsub_state = None
 
     def refresh(self) -> None:
-        """Resubscribe after an options change."""
+        """Resubscribe after an options change and re-arm the lamp."""
+        self._lamp_key = None
         self.start()
 
     # --- wake lamp -------------------------------------------------------
@@ -94,13 +101,14 @@ class AlarmExtras:
         if not lamp or alarm_settings.get("with_light") is not True:
             return
         if alarm == "sunrise":
+            assert progress is not None  # required for sunrise
             key = ("sunrise", round(progress, 3))
         else:
             key = ("ringing", 1.0)
         if key == self._lamp_key:
             return
         self._lamp_key = key
-        p = progress if alarm == "sunrise" else 1.0
+        p = progress if alarm == "sunrise" and progress is not None else 1.0
         data: dict[str, Any] = {"entity_id": lamp, "brightness": lamp_brightness(p)}
         if alarm == "ringing":
             data["brightness"] = 255

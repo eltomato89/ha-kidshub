@@ -32,6 +32,9 @@
       "already_configured": "The settings already exist.",
       "pairing_timeout": "Pairing timed out. Please try again.",
       "too_many_attempts": "Too many wrong codes - please restart pairing."
+    },
+    "error": {
+      "invalid_name": "Please enter a name."
     }
   },
   "entity": {

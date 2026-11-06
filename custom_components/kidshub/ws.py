@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 from typing import Any
 
 from aiohttp import WSMsgType, web
+from homeassistant.core import HomeAssistant
 
+from .const import CONF_DEVICE_ID, CONF_TOKEN_HASH, DOMAIN
 from .device import (
     InvalidRequest,
     KidDevice,
@@ -35,14 +39,32 @@ def _error(id_: int, code: str, message: str) -> dict[str, Any]:
     }
 
 
+def _paired_with_token(hass: HomeAssistant, device_id: str, token: str) -> bool:
+    """Return whether a config entry (loaded or not) pairs ``device_id`` with ``token``."""
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get(CONF_DEVICE_ID) == device_id:
+            stored = str(entry.data.get(CONF_TOKEN_HASH, ""))
+            return hmac.compare_digest(digest, stored)
+    return False
+
+
+class _NotLoaded(Exception):
+    """Paired device whose entry is not loaded right now (reload, HA start)."""
+
+
 class WsSession:
     """One connection of the app."""
 
     def __init__(
-        self, ws: web.WebSocketResponse, devices: dict[str, KidDevice]
+        self,
+        ws: web.WebSocketResponse,
+        devices: dict[str, KidDevice],
+        hass: HomeAssistant,
     ) -> None:
         self._ws = ws
         self._devices = devices
+        self._hass = hass
         self.device: KidDevice | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._send_lock = asyncio.Lock()
@@ -100,7 +122,14 @@ class WsSession:
         if not isinstance(device_id, str) or not isinstance(token, str):
             return None
         device = self._devices.get(device_id)
-        if device is None or not device.verify_token(token):
+        if device is None:
+            # Protocol 3.1: auth_invalid makes the app give up for good, so
+            # only send it when the device is really unknown or the token is
+            # wrong; a known but unloaded device just gets the socket closed.
+            if _paired_with_token(self._hass, device_id, token):
+                raise _NotLoaded
+            return None
+        if not device.verify_token(token):
             return None
         version = msg.get("app_version")
         device.app_version = version if isinstance(version, str) else None
@@ -108,7 +137,11 @@ class WsSession:
 
     async def run(self) -> None:
         """Handshake and serve the connection until it closes."""
-        device = await self._authenticate()
+        try:
+            device = await self._authenticate()
+        except _NotLoaded:
+            await self.close()  # no auth_invalid: the app retries with backoff
+            return
         if device is None:
             await self.send_json({"type": "auth_invalid"})
             await self._ws.close()

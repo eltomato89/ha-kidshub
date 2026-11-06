@@ -24,6 +24,7 @@ Verified against the client pinned by Home Assistant 2026.10.4
 - Events: ``mass.subscribe(cb, event_filter, id_filter)`` returns an unsubscribe callable;
   ``EventType.QUEUE_ADDED/QUEUE_UPDATED/QUEUE_TIME_UPDATED`` with ``object_id`` = queue id.
 - MA URIs have the form ``{provider}://{media_type}/{item_id}``.
+- ``Track.album`` is an ``ItemMapping``/``Album`` (``uri``) or None.
 - Durations in MA models are seconds; ``PodcastEpisode.metadata.release_date`` is a datetime.
 
 Sendspin players: the app registers with ``client_id`` ``kidshub-<device_id>`` and MA keeps
@@ -99,6 +100,7 @@ class MaItem:
     image: str | None
     duration_ms: int
     published: float | None
+    album_uri: str | None = None  # album of a track (``Track.album``)
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,7 @@ class MaAdapter:
         media_type = str(getattr(obj, "media_type", "") or "")
         kind = kind or _KIND_BY_MEDIA_TYPE.get(media_type, media_type)
         duration = getattr(obj, "duration", None) or 0
+        album_uri = getattr(getattr(obj, "album", None), "uri", None)
         return MaItem(
             uri=str(obj.uri),
             kind=kind,
@@ -236,6 +239,7 @@ class MaAdapter:
             image=self._image(mass, base_url, obj),
             duration_ms=int(duration * 1000),
             published=_published(obj) if kind == "episode" else None,
+            album_uri=album_uri if isinstance(album_uri, str) and album_uri else None,
         )
 
     # -- content --------------------------------------------------------

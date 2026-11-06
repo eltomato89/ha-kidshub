@@ -208,3 +208,58 @@ async def test_options_update_resubscribes(hass: HomeAssistant) -> None:
     hass.states.async_set("button.other", "2026-11-06T07:00:00+00:00")
     await hass.async_block_till_done()
     assert [c.args[0] for c in device.push.await_args_list].count(stop) == 1
+
+
+def _app_state(alarm_state, progress=None):
+    """State shaped like the real app: sunrise_progress only in sunrise/ringing."""
+    msg = {"type": "state", "alarm_state": alarm_state, "sleep_remaining_s": None}
+    if progress is not None:
+        msg["sunrise_progress"] = progress
+    return msg
+
+
+async def test_lamp_rearms_without_progress_key_lead_zero(hass: HomeAssistant) -> None:
+    """Two consecutive alarms with lead 0: off/stopped carry no progress key."""
+    hass.states.async_set("light.wake", "off", COLOR)
+    _, device = await _setup(hass)
+    calls = async_mock_service(hass, "light", "turn_on")
+    await device.async_on_state(_app_state("off"))
+    await device.async_on_state(_app_state("ringing", 1.0))
+    await hass.async_block_till_done()
+    assert len(calls) == 1
+    await device.async_on_state(_app_state("stopped"))
+    await device.async_on_state(_app_state("off"))
+    await device.async_on_state(_app_state("ringing", 1.0))  # next day
+    await hass.async_block_till_done()
+    assert len(calls) == 2
+    assert calls[1].data["brightness"] == 255
+
+
+async def test_ringing_without_progress_key(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.wake", "off", COLOR)
+    _, device = await _setup(hass)
+    calls = async_mock_service(hass, "light", "turn_on")
+    await device.async_on_state(_app_state("ringing"))
+    await hass.async_block_till_done()
+    assert len(calls) == 1 and calls[0].data["brightness"] == 255
+
+
+async def test_stop_button_works_with_real_app_shape(hass: HomeAssistant) -> None:
+    hass.states.async_set("button.stop", "unknown")
+    _, device = await _setup(hass)
+    await device.async_on_state(_app_state("ringing"))
+    hass.states.async_set("button.stop", "2026-11-06T07:01:00+00:00")
+    await hass.async_block_till_done()
+    device.push.assert_awaited_once_with({"type": "alarm_cmd", "cmd": "stop"})
+
+
+async def test_refresh_resets_lamp_key(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.wake", "off", COLOR)
+    entry, device = await _setup(hass)
+    calls = async_mock_service(hass, "light", "turn_on")
+    await device.async_on_state(_app_state("ringing", 1.0))
+    await hass.async_block_till_done()
+    hass.data[DOMAIN].extras[entry.entry_id].refresh()
+    await device.async_on_state(_app_state("ringing", 1.0))
+    await hass.async_block_till_done()
+    assert len(calls) == 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -25,7 +26,11 @@ def _is_int(value: Any) -> bool:
 
 
 def _int_or_none(value: Any) -> int | None:
-    return int(value) if _is_int(value) or isinstance(value, float) else None
+    if _is_int(value):
+        return int(value)
+    if isinstance(value, float) and math.isfinite(value):
+        return int(value)
+    return None
 
 
 def entity_state_message(entity_id: str, state: State | None) -> dict[str, Any]:

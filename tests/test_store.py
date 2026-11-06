@@ -91,3 +91,38 @@ async def test_persist_roundtrip(hass, hass_storage):
     assert s2.get_rating("a") == 5
     assert s2.ratings("track")[0].image_url == "img"
     assert s2.get_progress("b").finished is True
+
+
+async def test_load_tolerates_schema_drift(hass, hass_storage, caplog):
+    hass_storage["kidshub.e1"] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": "kidshub.e1",
+        "data": {
+            "settings": {},
+            "ratings": {
+                "extra": {
+                    "uri": "extra", "kind": "track", "stars": 4, "title": "T",
+                    "subtitle": "", "image_url": None, "updated": 1.0,
+                    "future_field": True,
+                },
+                "missing": {"uri": "missing", "kind": "track", "stars": 4},
+                "junk": "not a dict",
+            },
+            "progress": {
+                "p-extra": {
+                    "uri": "p-extra", "position_ms": 5, "duration_ms": 10,
+                    "finished": False, "track_index": 1, "updated": 1.0,
+                    "chapter": 3,
+                },
+                "p-missing": {"uri": "p-missing", "position_ms": 5},
+            },
+        },
+    }
+    s = await _store(hass)
+    assert s.get_rating("extra") == 4
+    assert s.get_rating("missing") is None
+    assert s.get_rating("junk") is None
+    assert s.get_progress("p-extra").track_index == 1
+    assert s.get_progress("p-missing") is None
+    assert "Skipping malformed" in caplog.text

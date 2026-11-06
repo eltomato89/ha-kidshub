@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import copy
+import logging
 import time
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import asdict, dataclass, fields
+from typing import Any, TypeVar
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+
+_LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 SAVE_DELAY = 5
@@ -57,6 +60,29 @@ class ProgressRecord:
     updated: float
 
 
+_R = TypeVar("_R", "RatingRecord", "ProgressRecord")
+
+
+def _load_records(raw: Any, cls: type[_R]) -> dict[str, _R]:
+    """Build records from stored dicts, tolerating schema drift.
+
+    Unknown keys are dropped; records that are not dicts or miss a field are
+    skipped (logged) so a changed schema can never break the entry setup.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    names = {f.name for f in fields(cls)}
+    records: dict[str, _R] = {}
+    for key, rec in raw.items():
+        try:
+            if not isinstance(rec, dict):
+                raise TypeError("not a dict")
+            records[key] = cls(**{k: v for k, v in rec.items() if k in names})
+        except TypeError as err:
+            _LOGGER.warning("Skipping malformed %s %r: %s", cls.__name__, key, err)
+    return records
+
+
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """Return a new dict with ``patch`` recursively merged into ``base``."""
     result = copy.deepcopy(base)
@@ -78,6 +104,7 @@ class KidStore:
         self._settings: dict[str, Any] = copy.deepcopy(DEFAULT_SETTINGS)
         self._ratings: dict[str, RatingRecord] = {}
         self._progress: dict[str, ProgressRecord] = {}
+        self._album_context: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         """Load stored data, merging saved settings over the defaults."""
@@ -85,18 +112,23 @@ class KidStore:
         if not data:
             return
         self._settings = _deep_merge(DEFAULT_SETTINGS, data.get("settings", {}))
-        self._ratings = {
-            uri: RatingRecord(**rec) for uri, rec in data.get("ratings", {}).items()
-        }
-        self._progress = {
-            uri: ProgressRecord(**rec) for uri, rec in data.get("progress", {}).items()
-        }
+        self._ratings = _load_records(data.get("ratings"), RatingRecord)
+        self._progress = _load_records(data.get("progress"), ProgressRecord)
+        ctx = data.get("album_context")
+        if (
+            isinstance(ctx, dict)
+            and isinstance(ctx.get("uri"), str)
+            and isinstance(ctx.get("tracks"), list)
+            and all(isinstance(t, str) for t in ctx["tracks"])
+        ):
+            self._album_context = {"uri": ctx["uri"], "tracks": list(ctx["tracks"])}
 
     def _data_to_save(self) -> dict[str, Any]:
         return {
             "settings": self._settings,
             "ratings": {u: asdict(r) for u, r in self._ratings.items()},
             "progress": {u: asdict(p) for u, p in self._progress.items()},
+            "album_context": self._album_context,
         }
 
     def _schedule_save(self) -> None:
@@ -173,3 +205,16 @@ class KidStore:
     def get_progress(self, uri: str) -> ProgressRecord | None:
         """Return stored progress for ``uri``."""
         return self._progress.get(uri)
+
+    @property
+    def album_context(self) -> tuple[str, tuple[str, ...]] | None:
+        """Return ``(album_uri, track_uris)`` of the album last played, if any."""
+        ctx = self._album_context
+        return (ctx["uri"], tuple(ctx["tracks"])) if ctx else None
+
+    def set_album_context(self, uri: str | None, tracks: tuple[str, ...] = ()) -> None:
+        """Remember (or with ``uri=None`` forget) the album the queue holds."""
+        new = {"uri": uri, "tracks": list(tracks)} if uri else None
+        if new != self._album_context:
+            self._album_context = new
+            self._schedule_save()

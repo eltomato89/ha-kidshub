@@ -20,6 +20,7 @@ from .entity import KidEntity
 ALARM_STATES = ["off", "sunrise", "ringing", "stopped"]
 TOP_RATED_MIN_STARS = 4
 MAX_SLEEP_REMAINING_S = 86400
+SLEEP_REMAINING_STEP_S = 60
 TOP_RATED_MAX_ITEMS = 20
 
 
@@ -55,7 +56,11 @@ class AlarmStateSensor(KidEntity, SensorEntity):
 
 
 class SleepRemainingSensor(KidEntity, SensorEntity):
-    """Remaining seconds of the sleep timer."""
+    """Remaining seconds of the sleep timer, floored to whole minutes.
+
+    The app reports the exact seconds every few seconds; flooring to 60 s steps
+    keeps the state (and the recorder) at one change per minute.
+    """
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
@@ -73,7 +78,7 @@ class SleepRemainingSensor(KidEntity, SensorEntity):
             return None
         if not 0 <= value <= MAX_SLEEP_REMAINING_S:
             return None
-        return int(value)
+        return int(value) // SLEEP_REMAINING_STEP_S * SLEEP_REMAINING_STEP_S
 
 
 class AppVersionSensor(KidEntity, SensorEntity):

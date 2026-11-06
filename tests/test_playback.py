@@ -3,7 +3,9 @@
 import asyncio
 import hashlib
 
+from homeassistant.config_entries import SIGNAL_CONFIG_ENTRY_CHANGED, ConfigEntryChange
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -738,3 +740,135 @@ async def test_play_containers_before_start_are_expanded(
     queue = [TRACK_A.uri, TRACK_B.uri, *(t.uri for t in ALBUM_TRACKS), EP1.uri]
     assert fake.play_calls == [(PLAYER, queue, 3, 1000)]
     await ws.close()
+
+
+# -- MA entry changes ---------------------------------------------------------
+
+
+async def test_ma_entry_change_pushes_config(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    fake._sendspin = {
+        "url": "ws://192.168.1.10:8927/sendspin",
+        "client_id": "kidshub-dev-a",
+        "name": "KidsHub Paul",
+    }
+    ma_entry = MockConfigEntry(domain="music_assistant", data={"url": "http://x"})
+    ma_entry.add_to_hass(hass)
+    # MockConfigEntry.add_to_hass bypasses the manager; announce it like async_add
+    async_dispatcher_send(
+        hass, SIGNAL_CONFIG_ENTRY_CHANGED, ConfigEntryChange.ADDED, ma_entry
+    )
+    config = await _next(ws, "config")
+    assert config["sendspin"] == fake._sendspin
+    fake._sendspin = None
+    await hass.config_entries.async_remove(ma_entry.entry_id)
+    config = await _next(ws, "config")
+    assert config["sendspin"] is None
+    await ws.close()
+
+
+# -- album context survives a restart -----------------------------------------
+
+
+async def test_album_context_survives_restart(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    entry = await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False))["success"]
+    await ws.close()
+    # HA restart: the entry (and its PlaybackService) is set up from scratch
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    device = _device(hass)
+    await device.update_settings({"music_enabled": False})
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(PLAYER, _snap(_as_track(ALBUM_TRACKS[3]), elapsed_ms=5000, index=3))
+    msg = await _next(ws, "now_playing")
+    assert (msg["kind"], msg["container_uri"]) == ("album_track", ALBUM.uri)
+    rec = device.store.get_progress(ALBUM.uri)
+    assert (rec.track_index, rec.position_ms) == (3, 5000)
+    # a Hörspiel is not music: the music lock does not block it
+    assert (await _request(ws, 2, "control", cmd="resume"))["success"] is True
+    assert fake.command_calls == [(PLAYER, "resume")]
+    await ws.close()
+
+
+async def test_playing_other_content_clears_album_context(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    entry = await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False))["success"]
+    assert (await _request(ws, 2, "play", uris=[PL1.uri]))["success"]
+    await ws.close()
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(PLAYER, _snap(_as_track(ALBUM_TRACKS[0]), elapsed_ms=1000))
+    assert (await _next(ws, "now_playing"))["kind"] == "track"
+    await ws.close()
+
+
+async def test_album_track_classified_from_item_album(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """Without album context the track's own album decides (allowed album)."""
+    import dataclasses
+
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    ws = await _connect(await hass_client_no_auth())
+    track = dataclasses.replace(_as_track(ALBUM_TRACKS[1]), album_uri=ALBUM.uri)
+    fake.emit_queue(PLAYER, _snap(track, elapsed_ms=2000, index=1))
+    msg = await _next(ws, "now_playing")
+    assert (msg["kind"], msg["container_uri"]) == ("album_track", ALBUM.uri)
+    assert device.store.get_progress(ALBUM.uri).position_ms == 2000
+    # a track of a non-allowed album stays a music track
+    other = dataclasses.replace(TRACK_A, album_uri="library://album/999")
+    fake.emit_queue(PLAYER, _snap(other, elapsed_ms=0, index=2))
+    assert (await _next(ws, "now_playing"))["kind"] == "track"
+    await ws.close()
+
+
+async def test_album_track_classified_from_queue_source(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(
+        PLAYER,
+        _snap(_as_track(ALBUM_TRACKS[2]), elapsed_ms=0, index=2, container=ALBUM.uri),
+    )
+    msg = await _next(ws, "now_playing")
+    assert (msg["kind"], msg["container_uri"]) == ("album_track", ALBUM.uri)
+    assert _device(hass).store.get_progress(ALBUM.uri).track_index == 2
+    await ws.close()
+
+
+def test_ma_item_carries_track_album() -> None:
+    from types import SimpleNamespace
+
+    from custom_components.kidshub.ma import MaAdapter
+
+    mass = SimpleNamespace(get_media_item_image_url=lambda obj: None)
+    track = SimpleNamespace(
+        uri="library://track/1",
+        media_type="track",
+        name="T",
+        duration=10,
+        artists=[],
+        album=SimpleNamespace(uri="library://album/7"),
+    )
+    adapter = MaAdapter.__new__(MaAdapter)
+    assert adapter._to_item(mass, "", track).album_uri == "library://album/7"
+    no_album = SimpleNamespace(**{**vars(track), "album": None})
+    assert adapter._to_item(mass, "", no_album).album_uri is None

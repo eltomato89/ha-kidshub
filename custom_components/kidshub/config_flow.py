@@ -89,13 +89,15 @@ class KidsHubConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask for the child's name and open a pairing."""
-        if user_input is None:
+        name = (user_input or {}).get(CONF_CHILD_NAME, "").strip()
+        if user_input is None or not name:
             return self.async_show_form(
                 step_id="device",
                 data_schema=vol.Schema({vol.Required(CONF_CHILD_NAME): str}),
+                errors={CONF_CHILD_NAME: "invalid_name"} if user_input else None,
             )
         registry = async_get_data(self.hass).pairing
-        self._pending = registry.start(user_input[CONF_CHILD_NAME].strip())
+        self._pending = registry.start(name)
         self._task = self.hass.async_create_task(self._wait(self._pending))
         return await self.async_step_wait_pairing()
 

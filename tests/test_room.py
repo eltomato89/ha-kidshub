@@ -299,3 +299,19 @@ async def test_settings_entry_has_no_options(hass: HomeAssistant) -> None:
     assert await async_setup_component(hass, DOMAIN, {})
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     assert flow["type"] is FlowResultType.ABORT
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_entity_state_non_finite_attributes(bad) -> None:
+    from homeassistant.core import State
+
+    from custom_components.kidshub.room_bridge import entity_state_message
+
+    msg = entity_state_message(
+        "light.decke", State("light.decke", "on", {"brightness": bad})
+    )
+    assert msg["brightness"] is None and msg["available"] is True
+    msg = entity_state_message(
+        "cover.rollo", State("cover.rollo", "open", {"current_position": bad})
+    )
+    assert msg["position"] is None

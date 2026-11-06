@@ -49,13 +49,13 @@ Fehlercodes: `not_allowed`, `not_found`, `ma_unavailable`, `invalid`, `tts_faile
 App → `{"type":"auth","device_id":"…","token":"…","app_version":"1.0.0"}`
 Server → `{"type":"auth_ok"}` und direkt danach `config`. Danach je ein `entity_state` für
 jede Zimmer-Entität und `now_playing`, falls etwas läuft.
-Bei ungültigem Token: `{"type":"auth_invalid"}`, danach schließt der Server.
+Bei ungültigem Token oder unbekanntem Gerät: `{"type":"auth_invalid"}`, danach schließt der Server — die App gibt dann endgültig auf (neu koppeln). Ist das Gerät bekannt, aber gerade nicht geladen (Neuladen, HA-Start), schließt der Server **ohne** `auth_invalid`; die App verbindet sich mit Backoff neu.
 Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit Backoff neu:
 1, 2, 5, 10, 30 s, danach alle 30 s.
 
 ### 3.2 Server → App (Push)
 
-**`config`** (vollständig, bei jeder Änderung neu gesendet)
+**`config`** (vollständig, bei jeder Änderung neu gesendet; `version` zählt nur innerhalb eines HA-Laufs hoch und beginnt nach einem HA-Neustart wieder bei 1 — die App vergleicht Versionen nicht, sondern übernimmt immer die letzte empfangene Config)
 ```json
 {"type":"config","version":17,
  "child_name":"Paul",
@@ -106,7 +106,7 @@ Sonnenaufgangs alle 15 s)
  "alarm_state":"off"|"sunrise"|"ringing"|"stopped","sunrise_progress":0.42,
  "sleep_remaining_s":812,"screen":"day"|"night"|"sunrise"}
 ```
-`sleep_remaining_s` ist `null`, wenn kein Timer läuft.
+`sleep_remaining_s` ist `null`/fehlt, wenn kein Timer läuft. `sunrise_progress` wird nur in `sunrise`/`ringing` gesendet und fehlt sonst; Empfänger müssen das Fehlen tolerieren.
 
 **Requests (mit `id`)**
 
@@ -116,7 +116,7 @@ Sonnenaufgangs alle 15 s)
 | `favorites` | `kind`: `track` \| `episode` \| `audiobook` | `{"items":[Item]}` (≥ 4 Sterne, absteigend nach Sternen, dann zuletzt bewertet) |
 | `play` | `uris`: [string] (1..n), `start_index` (default 0), `resume` (bool, default true), `from_start` (bool, default false) | `{}` |
 | `control` | `cmd`: `pause` \| `resume` \| `next` \| `previous` \| `seek`; `position_ms` bei seek | `{}` |
-| `rate` | `uri`, `kind`, `stars` 1..5 | `{}` |
+| `rate` | `uri`, `kind`, `stars` 1..5 | `{}` — `kind` muss der tatsächlichen Art des Inhalts entsprechen, sonst `invalid`. Hörspiele werden **als Ganzes** bewertet: bei `now_playing.kind == "album_track"` bewertet die App `container_uri` mit `kind:"album"` (bzw. `"audiobook"`); `album_track` selbst ist nicht bewertbar (`invalid`). |
 | `room` | `entity_id`, `action`: `toggle` \| `set_brightness` \| `set_color` \| `open` \| `close` \| `stop`; `value`: brightness `0..255` oder `[r,g,b]` | `{}` |
 | `tts` | `text` (max. 200 Zeichen) | `{"url":"/api/kidshub/tts/<sha>.<ext>"}` |
 | `alarm_update` | Teilobjekt von `config.alarm` (nur `enabled`, `time`, `weekdays`, `with_light`) | `{}`, danach neues `config` |
@@ -124,11 +124,12 @@ Sonnenaufgangs alle 15 s)
 
 **Item**
 ```json
-{"uri":"…","kind":"playlist"|"album"|"audiobook"|"podcast"|"episode"|"track"|"favorites",
+{"uri":"…","kind":"playlist"|"album"|"audiobook"|"podcast"|"episode"|"track"|"album_track"|"favorites",
  "title":"…","subtitle":"…","image_url":"/api/kidshub/img?u=…&s=256",
  "stars":null,"progress":{"position_ms":0,"duration_ms":0,"finished":false}}
 ```
-`progress` gibt es nur bei `episode` und `audiobook` (bei Alben bezogen auf das ganze Album).
+`progress` gibt es nur bei `episode`, `audiobook` und `album` (bei Alben: Fortschritt des aktuellen Titels, Fortsetzen über `track_index`).
+`album_track` = Titel/Kapitel eines Hörspiel-Albums (Kinder von `album`).
 
 `browse`-Semantik:
 - `music` ohne `parent_uri`: zuerst eine Kachel `{"kind":"favorites","uri":"kidshub://favorites/track"}`

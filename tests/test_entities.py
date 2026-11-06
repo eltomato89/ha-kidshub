@@ -206,3 +206,25 @@ async def test_non_finite_sleep_remaining(hass, hass_client_no_auth) -> None:
         await _wait_state(hass, alarm, alarm_state)
         assert hass.states.get(sleep).state == "unknown", raw
     await ws.close()
+
+
+async def test_sleep_remaining_whole_minutes(hass, hass_client_no_auth) -> None:
+    """Floored to 60 s so the 2 s state updates do not write ~1800 rows/night."""
+    await _setup(hass)
+    ws = await _connect(hass, hass_client_no_auth)
+    sleep = "sensor.kidshub_paul_sleep_remaining"
+    alarm = "sensor.kidshub_paul_alarm_state"
+    changes: list[str] = []
+    hass.bus.async_listen(
+        "state_changed",
+        lambda e: changes.append(e.data["new_state"].state)
+        if e.data["entity_id"] == sleep
+        else None,
+    )
+    for remaining, alarm_state in ((812, "off"), (790, "sunrise"), (780, "off"), (59, "sunrise")):
+        await ws.send_json(
+            {"type": "state", "alarm_state": alarm_state, "sleep_remaining_s": remaining}
+        )
+        await _wait_state(hass, alarm, alarm_state)
+    assert changes == ["780", "0"]
+    await ws.close()
