@@ -12,4 +12,11 @@ CONF_CHILD_NAME = "child_name"
 CONF_DEVICE_ID = "device_id"
 CONF_TOKEN_HASH = "token_hash"
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.NUMBER,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
+]

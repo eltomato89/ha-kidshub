@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -49,6 +51,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+def _track_sw_version(
+    hass: HomeAssistant, entry: ConfigEntry, device: KidDevice
+) -> None:
+    """Mirror the reported app version into the device registry."""
+
+    @callback
+    def _update() -> None:
+        registry = dr.async_get(hass)
+        dev = registry.async_get_device_by_identifier(
+            (DOMAIN, device.device_id), entry.entry_id
+        )
+        if dev is not None and dev.sw_version != device.app_version:
+            registry.async_update_device(dev.id, sw_version=device.app_version)
+
+    entry.async_on_unload(async_dispatcher_connect(hass, device.signal, _update))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up KidsHub from a config entry."""
     data = async_get_data(hass)
@@ -56,14 +75,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device = KidDevice(hass, entry)
         await device.async_load()
         data.devices[entry.data[CONF_DEVICE_ID]] = device
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        _track_sw_version(hass, entry, device)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if entry.data.get(ENTRY_TYPE) != ENTRY_TYPE_DEVICE:
+        return True
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded and entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_DEVICE:
+    if unloaded:
         device = hass.data[DOMAIN].devices.pop(entry.data[CONF_DEVICE_ID], None)
         if device is not None:
             await device.async_close()

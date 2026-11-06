@@ -100,6 +100,8 @@ class WsSession:
         device = self._devices.get(device_id)
         if device is None or not device.verify_token(token):
             return None
+        version = msg.get("app_version")
+        device.app_version = version if isinstance(version, str) else None
         return device
 
     async def run(self) -> None:

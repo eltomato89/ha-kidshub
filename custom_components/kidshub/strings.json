@@ -33,5 +33,121 @@
       "pairing_timeout": "Pairing timed out. Please try again.",
       "too_many_attempts": "Too many wrong codes - please restart pairing."
     }
+  },
+  "entity": {
+    "number": {
+      "max_volume": {
+        "name": "Max volume"
+      },
+      "alarm_max_volume": {
+        "name": "Alarm max volume"
+      },
+      "sleep_minutes": {
+        "name": "Sleep minutes"
+      },
+      "alarm_lead_minutes": {
+        "name": "Alarm lead minutes"
+      },
+      "night_brightness": {
+        "name": "Night brightness"
+      },
+      "day_brightness": {
+        "name": "Day brightness"
+      }
+    },
+    "time": {
+      "alarm_time": {
+        "name": "Alarm time"
+      },
+      "sleep_window_start": {
+        "name": "Sleep window start"
+      },
+      "sleep_window_end": {
+        "name": "Sleep window end"
+      },
+      "night_start": {
+        "name": "Night start"
+      },
+      "night_end": {
+        "name": "Night end"
+      }
+    },
+    "switch": {
+      "alarm_enabled": {
+        "name": "Alarm enabled"
+      },
+      "alarm_with_light": {
+        "name": "Alarm with light"
+      },
+      "music_enabled": {
+        "name": "Music enabled"
+      },
+      "settings_visible": {
+        "name": "Settings visible"
+      },
+      "tile_music": {
+        "name": "Music tile"
+      },
+      "tile_audiobooks": {
+        "name": "Audiobooks tile"
+      },
+      "tile_podcasts": {
+        "name": "Podcasts tile"
+      },
+      "alarm_mon": {
+        "name": "Alarm Monday"
+      },
+      "alarm_tue": {
+        "name": "Alarm Tuesday"
+      },
+      "alarm_wed": {
+        "name": "Alarm Wednesday"
+      },
+      "alarm_thu": {
+        "name": "Alarm Thursday"
+      },
+      "alarm_fri": {
+        "name": "Alarm Friday"
+      },
+      "alarm_sat": {
+        "name": "Alarm Saturday"
+      },
+      "alarm_sun": {
+        "name": "Alarm Sunday"
+      }
+    },
+    "sensor": {
+      "alarm_state": {
+        "name": "Alarm state",
+        "state": {
+          "off": "Off",
+          "sunrise": "Sunrise",
+          "ringing": "Ringing",
+          "stopped": "Stopped"
+        }
+      },
+      "sleep_remaining": {
+        "name": "Sleep remaining"
+      },
+      "app_version": {
+        "name": "App version"
+      },
+      "top_rated": {
+        "name": "Top rated"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      }
+    },
+    "button": {
+      "stop_alarm": {
+        "name": "Stop alarm"
+      },
+      "cancel_sleep_timer": {
+        "name": "Cancel sleep timer"
+      }
+    }
   }
 }

@@ -85,6 +85,7 @@ class KidDevice:
         self.store = KidStore(hass, entry.entry_id)
         self.config_version = 1
         self.last_state: dict[str, Any] | None = None
+        self.app_version: str | None = None
         self._session: WsSession | None = None
         self._handlers: dict[str, Handler] = {}
         self.register_handler("alarm_update", self._handle_alarm_update)

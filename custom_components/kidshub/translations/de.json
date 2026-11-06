@@ -33,5 +33,121 @@
       "pairing_timeout": "Die Kopplung ist abgelaufen. Bitte erneut versuchen.",
       "too_many_attempts": "Zu viele falsche Codes – bitte Kopplung neu starten"
     }
+  },
+  "entity": {
+    "number": {
+      "max_volume": {
+        "name": "Maximale Lautstärke"
+      },
+      "alarm_max_volume": {
+        "name": "Maximale Wecker-Lautstärke"
+      },
+      "sleep_minutes": {
+        "name": "Einschlaf-Minuten"
+      },
+      "alarm_lead_minutes": {
+        "name": "Wecker-Vorlauf"
+      },
+      "night_brightness": {
+        "name": "Nacht-Helligkeit"
+      },
+      "day_brightness": {
+        "name": "Tag-Helligkeit"
+      }
+    },
+    "time": {
+      "alarm_time": {
+        "name": "Weckzeit"
+      },
+      "sleep_window_start": {
+        "name": "Einschlaffenster Beginn"
+      },
+      "sleep_window_end": {
+        "name": "Einschlaffenster Ende"
+      },
+      "night_start": {
+        "name": "Nacht Beginn"
+      },
+      "night_end": {
+        "name": "Nacht Ende"
+      }
+    },
+    "switch": {
+      "alarm_enabled": {
+        "name": "Wecker aktiv"
+      },
+      "alarm_with_light": {
+        "name": "Wecker mit Licht"
+      },
+      "music_enabled": {
+        "name": "Musik erlaubt"
+      },
+      "settings_visible": {
+        "name": "Einstellungen sichtbar"
+      },
+      "tile_music": {
+        "name": "Kachel Musik"
+      },
+      "tile_audiobooks": {
+        "name": "Kachel Hörbücher"
+      },
+      "tile_podcasts": {
+        "name": "Kachel Podcasts"
+      },
+      "alarm_mon": {
+        "name": "Wecker Montag"
+      },
+      "alarm_tue": {
+        "name": "Wecker Dienstag"
+      },
+      "alarm_wed": {
+        "name": "Wecker Mittwoch"
+      },
+      "alarm_thu": {
+        "name": "Wecker Donnerstag"
+      },
+      "alarm_fri": {
+        "name": "Wecker Freitag"
+      },
+      "alarm_sat": {
+        "name": "Wecker Samstag"
+      },
+      "alarm_sun": {
+        "name": "Wecker Sonntag"
+      }
+    },
+    "sensor": {
+      "alarm_state": {
+        "name": "Wecker-Status",
+        "state": {
+          "off": "Aus",
+          "sunrise": "Sonnenaufgang",
+          "ringing": "Klingelt",
+          "stopped": "Gestoppt"
+        }
+      },
+      "sleep_remaining": {
+        "name": "Einschlafen verbleibend"
+      },
+      "app_version": {
+        "name": "App-Version"
+      },
+      "top_rated": {
+        "name": "Beste Bewertungen"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      }
+    },
+    "button": {
+      "stop_alarm": {
+        "name": "Wecker stoppen"
+      },
+      "cancel_sleep_timer": {
+        "name": "Einschlaf-Timer abbrechen"
+      }
+    }
   }
 }
