@@ -42,6 +42,10 @@ class MaUnavailable(Exception):
     """Music Assistant is not reachable (code ``ma_unavailable``)."""
 
 
+class NotFound(Exception):
+    """Allowed content no longer exists in Music Assistant (code ``not_found``)."""
+
+
 class InvalidRequest(Exception):
     """The request is malformed (code ``invalid``)."""
 

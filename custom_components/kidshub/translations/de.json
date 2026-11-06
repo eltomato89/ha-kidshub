@@ -185,7 +185,8 @@
         "title": "Wecker-Extras",
         "data": {
           "wake_lamp_entity": "Weck-Lampe",
-          "stop_button_entity": "Stopp-Taster"
+          "stop_button_entity": "Stopp-Taster",
+          "wake_media_uri": "Weckmusik"
         }
       },
       "content": {

@@ -26,7 +26,7 @@ from .const import (
     ENTRY_TYPE_SETTINGS,
 )
 from .config_builder import DEFAULT_COLORS
-from .device import MaUnavailable
+from .device import InvalidRequest, MaUnavailable
 from .ma import LIBRARY_TIMEOUT
 from .pairing import PAIRING_TTL, PendingPairing
 
@@ -35,6 +35,7 @@ PAIRING_TIMEOUT: float = PAIRING_TTL
 CONF_TTS_ENGINE = "tts_engine"
 CONF_TTS_LANGUAGE = "tts_language"
 CONF_TTS_OPTIONS = "tts_options"
+WAKE_LABEL_TIMEOUT = 5.0  # seconds to fetch playlist titles for the wake music
 
 
 class KidsHubConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -270,34 +271,56 @@ class DeviceOptionsFlow(OptionsFlow):
             ),
         )
 
+    async def _playlist_labels(self, uris: list[str]) -> dict[str, str]:
+        """Return MA titles of ``uris`` (falls back to the URI without MA)."""
+        labels = {u: u for u in uris}
+        ma = async_get_data(self.hass).ma
+        if ma is None or not uris:
+            return labels
+        try:
+            async with asyncio.timeout(WAKE_LABEL_TIMEOUT):
+                playlists = await ma.library("playlist")
+        except (MaUnavailable, InvalidRequest, TimeoutError):
+            return labels
+        for item in playlists:
+            if item.uri in labels and item.title:
+                labels[item.uri] = item.title
+        return labels
+
     async def async_step_alarm_extras(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose the wake lamp and the stop button."""
+        """Choose the wake lamp, the stop button and the wake-up music."""
         if user_input is not None:
-            for key in ("wake_lamp_entity", "stop_button_entity"):
+            for key in ("wake_lamp_entity", "stop_button_entity", "wake_media_uri"):
                 if user_input.get(key):
                     self._options[key] = user_input[key]
                 else:
                     self._options.pop(key, None)
             return self._save()
-        return self.async_show_form(
-            step_id="alarm_extras",
-            data_schema=vol.Schema(
-                {
-                    _suggested(
-                        "wake_lamp_entity", self._options.get("wake_lamp_entity")
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="light")
-                    ),
-                    _suggested(
-                        "stop_button_entity", self._options.get("stop_button_entity")
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=STOP_BUTTON_DOMAINS)
-                    ),
-                }
+        schema: dict[Any, Any] = {
+            _suggested(
+                "wake_lamp_entity", self._options.get("wake_lamp_entity")
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="light")),
+            _suggested(
+                "stop_button_entity", self._options.get("stop_button_entity")
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=STOP_BUTTON_DOMAINS)
             ),
-        )
+        }
+        playlists = list(self._options.get("playlists") or [])
+        if playlists:
+            labels = await self._playlist_labels(playlists)
+            current = self._options.get("wake_media_uri")
+            schema[
+                _suggested("wake_media_uri", current if current in labels else None)
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[{"value": u, "label": t} for u, t in labels.items()],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        return self.async_show_form(step_id="alarm_extras", data_schema=vol.Schema(schema))
 
     async def async_step_content(
         self, user_input: dict[str, Any] | None = None

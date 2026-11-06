@@ -23,6 +23,7 @@ from .content import ContentService, ImageRegistry
 from .device import KidDevice
 from .ma import MaAdapter
 from .pairing import PairingRegistry
+from .playback import PlaybackService
 from .room_bridge import RoomBridge
 from .views import PairView, WsView
 
@@ -85,6 +86,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _track_sw_version(hass, entry, device)
         assert data.ma is not None
         device.content = ContentService(device, data.ma, data.images)
+        playback = PlaybackService(device, data.ma)
+        playback.start(entry)
+        entry.async_on_unload(playback.stop)
         bridge = RoomBridge(hass, device)
         bridge.start()
         entry.async_on_unload(bridge.stop)

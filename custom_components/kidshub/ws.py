@@ -14,6 +14,7 @@ from .device import (
     KidDevice,
     MaUnavailable,
     NotAllowed,
+    NotFound,
     PushConfig,
 )
 
@@ -159,6 +160,8 @@ class WsSession:
             }
         except NotAllowed as err:
             reply = _error(id_, "not_allowed", str(err))
+        except NotFound as err:
+            reply = _error(id_, "not_found", str(err))
         except MaUnavailable as err:
             reply = _error(id_, "ma_unavailable", str(err))
         except InvalidRequest as err:

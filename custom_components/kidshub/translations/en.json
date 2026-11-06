@@ -185,7 +185,8 @@
         "title": "Alarm extras",
         "data": {
           "wake_lamp_entity": "Wake-up lamp",
-          "stop_button_entity": "Stop button"
+          "stop_button_entity": "Stop button",
+          "wake_media_uri": "Wake-up music"
         }
       },
       "content": {
