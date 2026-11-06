@@ -68,7 +68,7 @@ MA_TIMEOUT = 10.0  # seconds per MA request
 LIBRARY_TIMEOUT = 30.0  # seconds for a whole (paged) library listing
 
 LibraryKind = Literal["playlist", "album", "audiobook", "podcast"]
-Command = Literal["pause", "resume", "next", "previous", "stop"]
+Command = Literal["pause", "resume", "next", "previous", "stop", "clear"]
 
 _KIND_BY_MEDIA_TYPE = {
     "track": "track",
@@ -317,12 +317,30 @@ class MaAdapter:
 
     # -- playback (used by the player task) -------------------------------
 
-    async def play(self, player_id: str, uris: list[str]) -> None:
-        """Replace the queue of ``player_id`` with ``uris`` and start playback."""
+    async def play(
+        self,
+        player_id: str,
+        uris: list[str],
+        start_index: int = 0,
+        seek_ms: int = 0,
+    ) -> None:
+        """Replace the queue of ``player_id`` with ``uris`` and start playback.
+
+        The whole list is queued (so "previous" reaches earlier items); playback
+        starts at ``uris[start_index]``, ``seek_ms`` into that item.
+        ``REPLACE`` always starts at index 0, so a later start clears the queue,
+        adds the items without starting (``ADD``) and starts with ``play_index``.
+        """
         mass, _ = self._client()
+        queues = mass.player_queues
         async with self._guard():
-            await mass.player_queues.play_media(
-                player_id, list(uris), option=QueueOption.REPLACE
+            if start_index <= 0 and seek_ms <= 0:
+                await queues.play_media(player_id, list(uris), option=QueueOption.REPLACE)
+                return
+            await queues.clear(player_id)
+            await queues.play_media(player_id, list(uris), option=QueueOption.ADD)
+            await queues.play_index(
+                player_id, max(0, start_index), seek_position=max(0, seek_ms) // 1000
             )
 
     async def seek(self, player_id: str, position_ms: int) -> None:
@@ -341,6 +359,7 @@ class MaAdapter:
             "next": queues.next,
             "previous": queues.previous,
             "stop": queues.stop,
+            "clear": queues.clear,
         }.get(cmd)
         if func is None:
             raise InvalidRequest(f"unknown command: {cmd}")

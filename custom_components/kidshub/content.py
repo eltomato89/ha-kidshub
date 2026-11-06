@@ -114,9 +114,19 @@ class ContentService:
         self._children[uri] = (time.monotonic(), items)
         return items
 
-    async def find_allowed_item(self, uri: str) -> MaItem | None:
-        """Return the item if it is an allowed container or one of their children."""
-        if self.now_playing is not None and self.now_playing.uri == uri:
+    async def find_allowed_item(
+        self, uri: str, *, include_now_playing: bool = False
+    ) -> MaItem | None:
+        """Return the item if it is an allowed container or one of their children.
+
+        ``include_now_playing`` also accepts the item playing on the device (it may
+        have been started outside KidsHub); only rating uses that, never playback.
+        """
+        if (
+            include_now_playing
+            and self.now_playing is not None
+            and self.now_playing.uri == uri
+        ):
             return self.now_playing
         containers = self.allowed()
         if uri in containers:
@@ -272,7 +282,7 @@ class ContentService:
             raise InvalidRequest("unsupported kind")
         if isinstance(stars, bool) or not isinstance(stars, int) or not 1 <= stars <= 5:
             raise InvalidRequest("stars must be an integer 1..5")
-        found = await self.find_allowed_item(uri)
+        found = await self.find_allowed_item(uri, include_now_playing=True)
         if found is None:
             raise NotAllowed("content not allowed")
         if found.kind != kind:

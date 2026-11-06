@@ -136,8 +136,8 @@ async def test_play_episode_resumes(hass: HomeAssistant, hass_client_no_auth) ->
     res = await _request(ws, 1, "play", uris=[EP1.uri])
     assert res["success"] is True, res
     assert res["result"] == {}
-    assert fake.play_calls == [(PLAYER, [EP1.uri])]
-    assert fake.seek_calls == [(PLAYER, 120000)]
+    assert fake.play_calls == [(PLAYER, [EP1.uri], 0, 120000)]
+    assert fake.seek_calls == []
     await ws.close()
 
 
@@ -152,8 +152,7 @@ async def test_play_finished_episode_starts_over(
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[EP1.uri])
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [EP1.uri])]
-    assert fake.seek_calls == []
+    assert fake.play_calls == [(PLAYER, [EP1.uri], 0, 0)]
     await ws.close()
 
 
@@ -165,8 +164,7 @@ async def test_play_from_start(hass: HomeAssistant, hass_client_no_auth) -> None
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[BOOK.uri], from_start=True)
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [BOOK.uri])]
-    assert fake.seek_calls == []
+    assert fake.play_calls == [(PLAYER, [BOOK.uri], 0, 0)]
     rec = store.get_progress(BOOK.uri)
     assert rec.position_ms == 0
     assert rec.finished is False
@@ -188,8 +186,9 @@ async def test_play_album_resumes_track(
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[ALBUM.uri])
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS[2:]])]
-    assert fake.seek_calls == [(PLAYER, 30000)]
+    # the whole album is queued so that "previous" reaches earlier chapters
+    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS], 2, 30000)]
+    assert fake.seek_calls == []
     await ws.close()
 
 
@@ -201,8 +200,7 @@ async def test_play_album_without_progress(
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False)
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS])]
-    assert fake.seek_calls == []
+    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS], 0, 0)]
     await ws.close()
 
 
@@ -216,7 +214,7 @@ async def test_play_playlist_tracks_from_start_index(
         ws, 1, "play", uris=[TRACK_A.uri, TRACK_B.uri], start_index=1
     )
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [TRACK_B.uri])]
+    assert fake.play_calls == [(PLAYER, [TRACK_A.uri, TRACK_B.uri], 1, 0)]
     await ws.close()
 
 
@@ -289,7 +287,7 @@ async def test_play_favorites(hass: HomeAssistant, hass_client_no_auth) -> None:
     ]
     res = await _request(ws, 3, "play", uris=["kidshub://favorites/track"])
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [TRACK_B.uri, TRACK_A.uri])]
+    assert fake.play_calls == [(PLAYER, [TRACK_B.uri, TRACK_A.uri], 0, 0)]
     await ws.close()
 
 
@@ -503,7 +501,7 @@ async def test_music_disable_stops_running_track(
     await hass.async_block_till_done()
     await device.update_settings({"music_enabled": False})
     await hass.async_block_till_done()
-    assert fake.command_calls == [(PLAYER, "stop")]
+    assert fake.command_calls == [(PLAYER, "stop"), (PLAYER, "clear")]
 
 
 async def test_music_disable_keeps_audiobook(
@@ -528,7 +526,7 @@ async def test_wake_play(hass: HomeAssistant, hass_client_no_auth) -> None:
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "wake_play")
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [PL1.uri])]
+    assert fake.play_calls == [(PLAYER, [PL1.uri], 0, 0)]
     await ws.close()
 
 
@@ -558,7 +556,7 @@ async def test_wake_play_slow_ma(
     fake = _fake()
     await _setup(hass, fake, {**OPTIONS, "wake_media_uri": PL1.uri})
 
-    async def stall(player_id, uris):
+    async def stall(*args, **kwargs):
         await asyncio.Event().wait()
 
     fake.play = stall
@@ -592,3 +590,151 @@ async def test_options_wake_media_uri(hass: HomeAssistant) -> None:
     )
     flow = await hass.config_entries.options.async_configure(flow["flow_id"], {})
     assert "wake_media_uri" not in entry.options
+
+
+async def test_music_disable_clears_paused_track(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=1000, playing=False))
+    await hass.async_block_till_done()
+    await device.update_settings({"music_enabled": False})
+    await hass.async_block_till_done()
+    assert fake.command_calls == [(PLAYER, "stop"), (PLAYER, "clear")]
+
+
+async def test_control_blocked_for_music_when_disabled(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=1000, playing=False))
+    await hass.async_block_till_done()
+    await device.update_settings({"music_enabled": False})
+    await hass.async_block_till_done()
+    fake.command_calls.clear()
+    ws = await _connect(await hass_client_no_auth())
+    for i, fields in enumerate(
+        (
+            {"cmd": "resume"},
+            {"cmd": "next"},
+            {"cmd": "previous"},
+            {"cmd": "seek", "position_ms": 0},
+        ),
+        1,
+    ):
+        res = await _request(ws, i, "control", **fields)
+        assert res["error"]["code"] == "not_allowed", fields
+    assert fake.command_calls == []
+    assert fake.seek_calls == []
+    # pausing is always allowed
+    assert (await _request(ws, 9, "control", cmd="pause"))["success"] is True
+    # audiobooks are not music
+    fake.emit_queue(PLAYER, _snap(BOOK, elapsed_ms=1000, playing=False))
+    assert (await _request(ws, 10, "control", cmd="resume"))["success"] is True
+    await ws.close()
+
+
+async def test_play_now_playing_uri_still_needs_allowlist(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    foreign = item("library://track/foreign", "track", "Fremd")
+    fake.emit_queue(PLAYER, _snap(foreign, elapsed_ms=1000))  # started via MA UI
+    await hass.async_block_till_done()
+    ws = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "play", uris=[foreign.uri])
+    assert res["error"]["code"] == "not_allowed"
+    assert fake.play_calls == []
+    # it can still be rated while it plays
+    res = await _request(ws, 2, "rate", uri=foreign.uri, kind="track", stars=4)
+    assert res["success"] is True, res
+    await ws.close()
+
+
+async def test_failed_album_play_keeps_no_album_context(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+
+    async def down(*args, **kwargs):
+        from custom_components.kidshub.device import MaUnavailable
+
+        raise MaUnavailable("down")
+
+    fake.play = down
+    ws = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "play", uris=[ALBUM.uri])
+    assert res["error"]["code"] == "ma_unavailable"
+    fake.emit_queue(PLAYER, _snap(_as_track(ALBUM_TRACKS[0]), elapsed_ms=1000))
+    assert (await _next(ws, "now_playing"))["kind"] == "track"
+    await ws.close()
+
+
+async def test_ma_adapter_play_with_start_index(hass: HomeAssistant) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock, call
+
+    from homeassistant.config_entries import ConfigEntryState
+    from music_assistant_models.enums import QueueOption
+
+    from custom_components.kidshub.ma import MaAdapter
+
+    queues = SimpleNamespace(
+        **{
+            name: AsyncMock()
+            for name in (
+                "play_media", "play_index", "clear", "stop",
+                "pause", "resume", "next", "previous",
+            )
+        }
+    )
+    mass = SimpleNamespace(
+        connection=SimpleNamespace(connected=True), player_queues=queues
+    )
+    entry = MockConfigEntry(
+        domain="music_assistant",
+        data={"url": "http://192.168.1.10:8095"},
+        state=ConfigEntryState.LOADED,
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(mass=mass, listen_task=Mock())
+    adapter = MaAdapter(hass)
+
+    await adapter.play("p1", ["a", "b"])
+    queues.play_media.assert_awaited_once_with(
+        "p1", ["a", "b"], option=QueueOption.REPLACE
+    )
+    queues.play_index.assert_not_awaited()
+
+    queues.play_media.reset_mock()
+    await adapter.play("p1", ["a", "b", "c"], start_index=2, seek_ms=30500)
+    queues.clear.assert_awaited_once_with("p1")
+    queues.play_media.assert_awaited_once_with(
+        "p1", ["a", "b", "c"], option=QueueOption.ADD
+    )
+    queues.play_index.assert_awaited_once_with("p1", 2, seek_position=30)
+
+    await adapter.command("p1", "clear")
+    assert queues.clear.await_args_list[-1] == call("p1")
+
+
+async def test_play_containers_before_start_are_expanded(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    _device(hass).store.set_progress(
+        ALBUM.uri, position_ms=1000, duration_ms=600000, finished=False, track_index=1
+    )
+    ws = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "play", uris=[PL1.uri, ALBUM.uri, EP1.uri], start_index=1)
+    assert res["success"] is True, res
+    queue = [TRACK_A.uri, TRACK_B.uri, *(t.uri for t in ALBUM_TRACKS), EP1.uri]
+    assert fake.play_calls == [(PLAYER, queue, 3, 1000)]
+    await ws.close()

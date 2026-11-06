@@ -51,7 +51,8 @@ class FakeMa:
         self._children = children or {}
         self._sendspin = sendspin
         self._players = players or {}  # client_id -> player_id
-        self.play_calls: list[tuple[str, list[str]]] = []
+        # (player_id, uris, start_index, seek_ms)
+        self.play_calls: list[tuple[str, list[str], int, int]] = []
         self.seek_calls: list[tuple[str, int]] = []
         self.command_calls: list[tuple[str, str]] = []
         self.children_calls: list[str] = []
@@ -87,9 +88,11 @@ class FakeMa:
         self._check()
         return self._players.get(client_id)
 
-    async def play(self, player_id: str, uris: list[str]) -> None:
+    async def play(
+        self, player_id: str, uris: list[str], start_index: int = 0, seek_ms: int = 0
+    ) -> None:
         self._check()
-        self.play_calls.append((player_id, list(uris)))
+        self.play_calls.append((player_id, list(uris), start_index, seek_ms))
 
     async def seek(self, player_id: str, position_ms: int) -> None:
         self._check()

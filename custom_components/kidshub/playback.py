@@ -42,6 +42,7 @@ FINISHED_MARGIN_MS = 30000
 RETRY_DELAYS = (1, 2, 5, 10, 30, 60)  # seconds, queue subscription backoff
 
 MUSIC_KINDS = {"track", "playlist"}
+CONTAINER_KINDS = {"playlist", "album", "podcast"}
 NOW_PLAYING_KINDS = {"track", "episode", "audiobook"}
 COMMANDS = {"pause", "resume", "next", "previous"}
 
@@ -73,8 +74,8 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _parse_play(msg: dict[str, Any]) -> tuple[list[str], bool, bool]:
-    """Validate a ``play`` request; return the URIs from ``start_index`` on."""
+def _parse_play(msg: dict[str, Any]) -> tuple[list[str], int, bool, bool]:
+    """Validate a ``play`` request; return ``(uris, start_index, resume, from_start)``."""
     uris = msg.get("uris")
     if (
         not isinstance(uris, list)
@@ -89,7 +90,7 @@ def _parse_play(msg: dict[str, Any]) -> tuple[list[str], bool, bool]:
     from_start = msg.get("from_start", False)
     if not isinstance(resume, bool) or not isinstance(from_start, bool):
         raise InvalidRequest("resume and from_start must be booleans")
-    return uris[start:], resume, from_start
+    return uris, start, resume, from_start
 
 
 class PlaybackService:
@@ -218,26 +219,43 @@ class PlaybackService:
     # -- handlers -------------------------------------------------------------
 
     async def _handle_play(self, msg: dict[str, Any]) -> dict[str, Any]:
-        uris, resume, from_start = _parse_play(msg)
-        items = await self._resolve_items(uris)
+        uris, start, resume, from_start = _parse_play(msg)
+        groups = [await self._resolve_uri(uri) for uri in uris]
+        if not groups[start]:
+            raise NotFound("nothing to play")
         if not self.device.store.settings["music_enabled"] and any(
-            i.kind in MUSIC_KINDS for i in items
+            i.kind in MUSIC_KINDS for group in groups for i in group
         ):
             raise NotAllowed("music is disabled")
-        first = items[0]
-        queue = [i.uri for i in items]
+        # Containers before the start item are expanded so that the queue index
+        # of the start item is known (MA expands them in the queue as well).
+        queue: list[str] = []
+        for group in groups[:start]:
+            for it in group:
+                if it.kind in CONTAINER_KINDS:
+                    queue.extend(c.uri for c in await self.content.children(it.uri))
+                else:
+                    queue.append(it.uri)
+        index = len(queue)
+        first, *rest = [i for group in groups[start:] for i in group]
         album: _Album | None = None
         seek_ms = 0
         if first.kind == "album":
             tracks = await self.content.children(first.uri, fresh=True)
             if not tracks:
                 raise NotFound("album has no tracks")
-            index, seek_ms = self._resume_point(first, resume, from_start, len(tracks))
+            track_index, seek_ms = self._resume_point(
+                first, resume, from_start, len(tracks)
+            )
             album = _Album(first.uri, tuple(t.uri for t in tracks))
-            queue = [t.uri for t in tracks[index:]] + queue[1:]
-        elif first.kind in ("episode", "audiobook"):
-            _, seek_ms = self._resume_point(first, resume, from_start, 1)
-        await self._play(queue, album, seek_ms)
+            queue.extend(album.tracks)
+            index += track_index
+        else:
+            if first.kind in ("episode", "audiobook"):
+                _, seek_ms = self._resume_point(first, resume, from_start, 1)
+            queue.append(first.uri)
+        queue.extend(i.uri for i in rest)
+        await self._play(queue, index, album, seek_ms)
         return {}
 
     def _resume_point(
@@ -261,38 +279,50 @@ class PlaybackService:
             return 0, 0
         return rec.track_index, max(0, rec.position_ms)
 
-    async def _resolve_items(self, uris: list[str]) -> list[MaItem]:
-        """Check ``uris`` against the allowlist; expand favorites tiles."""
-        items: list[MaItem] = []
-        for uri in uris:
-            if uri.startswith(FAVORITES_PREFIX):
-                for fav in self.content.favorites(uri.removeprefix(FAVORITES_PREFIX)):
-                    found = await self.content.find_allowed_item(fav["uri"])
-                    if found is not None:  # skip favorites no longer allowed
-                        items.append(found)
-                continue
-            found = await self.content.find_allowed_item(uri)
-            if found is None:
-                if uri in self.content.allowed():
-                    raise NotFound("content no longer exists in Music Assistant")
-                raise NotAllowed("content not allowed")
-            items.append(found)
-        if not items:
-            raise NotFound("nothing to play")
-        return items
+    async def _resolve_uri(self, uri: str) -> list[MaItem]:
+        """Check ``uri`` against the allowlist; a favorites tile gives its items."""
+        if uri.startswith(FAVORITES_PREFIX):
+            items: list[MaItem] = []
+            for fav in self.content.favorites(uri.removeprefix(FAVORITES_PREFIX)):
+                found = await self.content.find_allowed_item(fav["uri"])
+                if found is not None:  # skip favorites no longer allowed
+                    items.append(found)
+            return items
+        found = await self.content.find_allowed_item(uri)
+        if found is None:
+            if uri in self.content.allowed():
+                raise NotFound("content no longer exists in Music Assistant")
+            raise NotAllowed("content not allowed")
+        return [found]
 
-    async def _play(self, queue: list[str], album: _Album | None, seek_ms: int) -> None:
+    async def _play(
+        self, queue: list[str], index: int, album: _Album | None, seek_ms: int
+    ) -> None:
         async with self._play_lock:
             try:
                 player_id = await self._player()
-                self._flush_current()
-                self._album = album
-                await self.ma.play(player_id, queue)
-                if seek_ms > 0:
-                    await self.ma.seek(player_id, seek_ms)
             except MaUnavailable:
                 self._request_resubscribe()
                 raise
+            self._flush_current()
+            # Set before playing: queue events of the new queue may arrive while
+            # ``play`` is still awaited. Restored if MA does not take the queue.
+            previous, self._album = self._album, album
+            try:
+                await self.ma.play(player_id, queue, index, seek_ms)
+            except MaUnavailable:
+                self._album = previous
+                self._request_resubscribe()
+                raise
+
+    def _music_blocked(self) -> bool:
+        """Return whether music is disabled and the queue holds music."""
+        cur = self._current
+        return (
+            not self.device.store.settings["music_enabled"]
+            and cur is not None
+            and cur.kind == "track"
+        )
 
     async def _handle_control(self, msg: dict[str, Any]) -> dict[str, Any]:
         cmd = msg.get("cmd")
@@ -302,6 +332,8 @@ class PlaybackService:
                 raise InvalidRequest("position_ms must be a non-negative integer")
         elif cmd not in COMMANDS:
             raise InvalidRequest("unknown cmd")
+        if cmd != "pause" and self._music_blocked():
+            raise NotAllowed("music is disabled")
         try:
             player_id = await self._player()
             if cmd == "seek":
@@ -321,7 +353,7 @@ class PlaybackService:
             raise NotAllowed("wake-up music is not allowed")
         try:
             async with asyncio.timeout(WAKE_PLAY_TIMEOUT):
-                await self._play([uri], None, 0)
+                await self._play([uri], 0, None, 0)
         except TimeoutError as err:
             self._request_resubscribe()
             raise MaUnavailable("Music Assistant did not start in time") from err
@@ -445,25 +477,19 @@ class PlaybackService:
 
     @callback
     def _on_device_update(self) -> None:
-        """Stop running music when ``music_enabled`` is switched off."""
+        """Stop and clear queued music when ``music_enabled`` is switched off."""
         enabled = self.device.store.settings["music_enabled"]
         was, self._music_enabled = self._music_enabled, enabled
-        cur = self._current
-        if (
-            was
-            and not enabled
-            and cur is not None
-            and cur.kind == "track"
-            and cur.playing
-            and self._player_id is not None
-        ):
+        if was and not enabled and self._music_blocked():
             self.hass.async_create_task(
-                self._stop_music(self._player_id),
-                f"kidshub stop music {self.device.device_id}",
+                self._stop_music(), f"kidshub stop music {self.device.device_id}"
             )
 
-    async def _stop_music(self, player_id: str) -> None:
+    async def _stop_music(self) -> None:
+        """Stop the music and clear the queue so it cannot be resumed."""
         try:
+            player_id = await self._player()
             await self.ma.command(player_id, "stop")
+            await self.ma.command(player_id, "clear")
         except MaUnavailable as err:
             _LOGGER.warning("Could not stop music after it was disabled: %s", err)
