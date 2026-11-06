@@ -11,6 +11,9 @@ ENTRY_TYPE_SETTINGS = "settings"
 CONF_CHILD_NAME = "child_name"
 CONF_DEVICE_ID = "device_id"
 CONF_TOKEN_HASH = "token_hash"
+CONF_TTS_ENGINE = "tts_engine"
+CONF_TTS_LANGUAGE = "tts_language"
+CONF_TTS_OPTIONS = "tts_options"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,

@@ -25,7 +25,8 @@ from .ma import MaAdapter
 from .pairing import PairingRegistry
 from .playback import PlaybackService
 from .room_bridge import RoomBridge
-from .views import PairView, WsView
+from .tts_cache import TtsCache
+from .views import ImageView, PairView, TtsView, WsView
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -39,6 +40,7 @@ class KidsHubData:
     views_registered: bool = False
     ma: MaAdapter | None = None  # set in async_setup; tests inject a fake
     images: ImageRegistry = field(default_factory=ImageRegistry)  # emitted image URLs
+    tts: TtsCache | None = None  # created in async_setup (needs hass)
 
 
 def async_get_data(hass: HomeAssistant) -> KidsHubData:
@@ -47,6 +49,8 @@ def async_get_data(hass: HomeAssistant) -> KidsHubData:
     if not data.views_registered:
         hass.http.register_view(PairView())
         hass.http.register_view(WsView())
+        hass.http.register_view(ImageView())
+        hass.http.register_view(TtsView())
         data.views_registered = True
     return data
 
@@ -54,6 +58,8 @@ def async_get_data(hass: HomeAssistant) -> KidsHubData:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the KidsHub component (views are needed before any entry)."""
     data = async_get_data(hass)
+    if data.tts is None:
+        data.tts = TtsCache(hass)
     if data.ma is None:
         data.ma = MaAdapter(hass)
     return True

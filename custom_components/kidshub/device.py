@@ -26,6 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
+TTS_MAX_CHARS = 200
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ALARM_KEYS = {"enabled", "time", "weekdays", "with_light"}
 
@@ -44,6 +45,10 @@ class MaUnavailable(Exception):
 
 class NotFound(Exception):
     """Allowed content no longer exists in Music Assistant (code ``not_found``)."""
+
+
+class TtsFailed(Exception):
+    """Speech could not be generated (code ``tts_failed``)."""
 
 
 class InvalidRequest(Exception):
@@ -97,6 +102,7 @@ class KidDevice:
         self._handlers: dict[str, Handler] = {}
         self._connected_callbacks: list[Callable[[], Awaitable[None]]] = []
         self.register_handler("alarm_update", self._handle_alarm_update)
+        self.register_handler("tts", self._handle_tts)
 
     @property
     def connected(self) -> bool:
@@ -213,3 +219,10 @@ class KidDevice:
         patch = _parse_alarm_patch(msg)
         await self._apply_settings({"alarm": patch})
         return PushConfig()
+
+    async def _handle_tts(self, msg: dict[str, Any]) -> dict[str, Any]:
+        text = msg.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > TTS_MAX_CHARS:
+            raise InvalidRequest("text must be 1..200 characters")
+        url = await self.hass.data[DOMAIN].tts.get_url(text)
+        return {"url": url}

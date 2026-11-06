@@ -20,6 +20,9 @@ from .const import (
     CONF_CHILD_NAME,
     CONF_DEVICE_ID,
     CONF_TOKEN_HASH,
+    CONF_TTS_ENGINE,
+    CONF_TTS_LANGUAGE,
+    CONF_TTS_OPTIONS,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_DEVICE,
@@ -32,9 +35,6 @@ from .pairing import PAIRING_TTL, PendingPairing
 
 PAIRING_TIMEOUT: float = PAIRING_TTL
 
-CONF_TTS_ENGINE = "tts_engine"
-CONF_TTS_LANGUAGE = "tts_language"
-CONF_TTS_OPTIONS = "tts_options"
 WAKE_LABEL_TIMEOUT = 5.0  # seconds to fetch playlist titles for the wake music
 
 

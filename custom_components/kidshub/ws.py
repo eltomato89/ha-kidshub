@@ -16,6 +16,7 @@ from .device import (
     NotAllowed,
     NotFound,
     PushConfig,
+    TtsFailed,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -162,6 +163,8 @@ class WsSession:
             reply = _error(id_, "not_allowed", str(err))
         except NotFound as err:
             reply = _error(id_, "not_found", str(err))
+        except TtsFailed as err:
+            reply = _error(id_, "tts_failed", str(err))
         except MaUnavailable as err:
             reply = _error(id_, "ma_unavailable", str(err))
         except InvalidRequest as err:
