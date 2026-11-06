@@ -43,6 +43,7 @@ async def _connect(client):
     assert (await ws.receive_json())["type"] == "auth_ok"
     config = await ws.receive_json()
     assert config["type"] == "config"
+    assert (await ws.receive_json())["type"] == "now_playing"
     return ws, config
 
 
@@ -183,7 +184,7 @@ async def test_entity_state_on_connect_and_push(
     hass.states.async_set("light.decke", "unavailable")
     msg = await asyncio.wait_for(ws.receive_json(), 2)
     assert msg["available"] is False
-    assert msg["on"] is None and msg["brightness"] is None
+    assert msg["on"] is False and msg["brightness"] is None
     await ws.close()
 
 
@@ -198,6 +199,7 @@ async def test_cover_state_and_removed_entity(
     hass.states.async_remove("cover.rollo")
     msg = await asyncio.wait_for(ws.receive_json(), 2)
     assert msg["available"] is False and msg["position"] is None
+    assert msg["on"] is False
     await ws.close()
 
 

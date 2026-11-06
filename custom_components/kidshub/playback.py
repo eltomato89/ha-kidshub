@@ -50,6 +50,19 @@ NOW_PLAYING_KINDS = {"track", "episode", "audiobook"}
 COMMANDS = {"pause", "resume", "next", "previous"}
 
 
+_CONTAINER_KINDS = {"album", "audiobook", "playlist", "podcast"}
+
+
+def _container_kind(cur: "_Current") -> str | None:
+    """Return the protocol ``container_kind`` of what the current item plays in."""
+    if cur.kind == "album_track":
+        return "album"
+    if cur.container_uri is None:
+        return None
+    media_type = cur.container_uri.partition("://")[2].partition("/")[0]
+    return media_type if media_type in _CONTAINER_KINDS else None
+
+
 @dataclass(frozen=True)
 class _Album:
     """An album played by ``play`` (its queue holds the album's tracks)."""
@@ -214,8 +227,7 @@ class PlaybackService:
         if self._unsub_queue is None:
             # the Sendspin player appears in MA once the app has connected
             self._request_resubscribe()
-        if self._current is not None:
-            await self.device.push(self._now_playing_message())
+        await self.device.push(self._now_playing_message())
 
     # -- player ---------------------------------------------------------------
 
@@ -518,6 +530,7 @@ class PlaybackService:
             "elapsed_ms": cur.elapsed_ms,
             "stars": self.device.store.get_rating(rated) if rated else None,
             "container_uri": cur.container_uri,
+            "container_kind": _container_kind(cur),
         }
 
     # -- settings -------------------------------------------------------------

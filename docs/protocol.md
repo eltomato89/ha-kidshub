@@ -90,8 +90,10 @@ sonstiges dimmbares `light` → `dimmer`, `cover` → `cover`, alles andere → 
 ```json
 {"type":"now_playing","kind":"track"|"episode"|"audiobook"|"album_track",
  "uri":"…","title":"…","subtitle":"…","image_url":"/api/kidshub/img?u=…",
- "duration_ms":183000,"elapsed_ms":42000,"stars":4,"container_uri":"…"}
+ "duration_ms":183000,"elapsed_ms":42000,"stars":4,"container_uri":"…",
+ "container_kind":"album"|"audiobook"|"playlist"|"podcast"|null}
 ```
+`container_kind` ist optional (ab Integration 0.1.1); fehlt es, ermittelt die App die Art aus früheren `browse`-Ergebnissen.
 Ist die Queue leer: `{"type":"now_playing","kind":null}`.
 
 **`alarm_cmd`**: `{"type":"alarm_cmd","cmd":"stop"}`

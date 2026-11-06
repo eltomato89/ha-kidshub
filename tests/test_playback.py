@@ -85,13 +85,17 @@ def _device(hass):
     return hass.data[DOMAIN].devices["dev-a"]
 
 
-async def _connect(client):
+async def _connect(client, connect_np=None):
     ws = await client.ws_connect(WS_URL)
     await ws.send_json(
         {"type": "auth", "device_id": "dev-a", "token": "tok-a", "app_version": "1"}
     )
     assert (await ws.receive_json())["type"] == "auth_ok"
     assert (await ws.receive_json())["type"] == "config"
+    first = await ws.receive_json()
+    assert first["type"] == "now_playing"
+    if connect_np is not None:
+        connect_np.append(first)
     return ws
 
 
@@ -354,6 +358,7 @@ async def test_queue_update_saves_progress_and_pushes_now_playing(
     assert msg["image_url"].startswith("/api/kidshub/img?u=")
     assert msg["image_url"].endswith("&s=512")
     assert msg["container_uri"] is None
+    assert msg["container_kind"] is None
     rec = device.store.get_progress(EP1.uri)
     assert rec.position_ms == 50000
     assert rec.finished is False
@@ -420,6 +425,7 @@ async def test_album_track_now_playing_and_progress(
     assert msg["kind"] == "album_track"
     assert msg["uri"] == ALBUM_TRACKS[2].uri
     assert msg["container_uri"] == ALBUM.uri
+    assert msg["container_kind"] == "album"
     assert msg["stars"] == 5  # the container's rating
     rec = device.store.get_progress(ALBUM.uri)
     assert (rec.track_index, rec.position_ms, rec.finished) == (2, 40000, False)
@@ -447,6 +453,7 @@ async def test_playlist_track_now_playing_no_progress(
     fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=1000, container=PL1.uri))
     msg = await _next(ws, "now_playing")
     assert msg["kind"] == "track"
+    assert msg["container_kind"] == "playlist"
     assert msg["stars"] is None
     assert device.store.get_progress(TRACK_A.uri) is None
     fake.emit_queue(PLAYER, _snap(None, playing=False))
@@ -462,9 +469,33 @@ async def test_now_playing_sent_on_connect(
     await _setup(hass, fake)
     fake.emit_queue(PLAYER, _snap(EP1, elapsed_ms=7000))
     await hass.async_block_till_done()
-    ws = await _connect(await hass_client_no_auth())
-    msg = await _next(ws, "now_playing")
+    first: list = []
+    ws = await _connect(await hass_client_no_auth(), first)
+    msg = first[0]
     assert (msg["uri"], msg["elapsed_ms"]) == (EP1.uri, 7000)
+    await ws.close()
+
+
+async def test_container_kind_audiobook_and_podcast(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(PLAYER, _snap(BOOK, container=BOOK.uri))
+    assert (await _next(ws, "now_playing"))["container_kind"] == "audiobook"
+    fake.emit_queue(PLAYER, _snap(EP2, container=POD.uri))
+    assert (await _next(ws, "now_playing"))["container_kind"] == "podcast"
+    await ws.close()
+
+
+async def test_empty_now_playing_sent_on_connect(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass, _fake())
+    first: list = []
+    ws = await _connect(await hass_client_no_auth(), first)
+    assert first == [{"type": "now_playing", "kind": None}]
     await ws.close()
 
 

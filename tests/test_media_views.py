@@ -387,6 +387,7 @@ async def test_tts_error_code_over_ws(hass: HomeAssistant, hass_client_no_auth) 
     )
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json({"type": "tts", "id": 7, "text": "Hallo"})
     res = await ws.receive_json()
     assert res["error"]["code"] == "tts_failed"

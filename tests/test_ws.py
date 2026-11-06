@@ -151,6 +151,7 @@ async def test_unknown_request(hass: HomeAssistant, hass_client_no_auth) -> None
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json({"type": "foo", "id": 1})
     res = await ws.receive_json()
     assert res["type"] == "result" and res["id"] == 1
@@ -185,6 +186,7 @@ async def test_handler_errors_map_to_codes(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     codes = {}
     for i, name in enumerate(("deny", "down", "boom", "ok"), 1):
         await ws.send_json({"type": name, "id": i})
@@ -206,6 +208,7 @@ async def test_alarm_update_pushes_config(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     first = await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json({"type": "alarm_update", "id": 5, "time": "06:30"})
     res = await ws.receive_json()
     assert res["type"] == "result" and res["success"] is True
@@ -246,6 +249,7 @@ async def test_alarm_update_invalid(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json({"type": "alarm_update", "id": 1, **payload})
     res = await ws.receive_json()
     assert res["success"] is False and res["error"]["code"] == "invalid"
@@ -260,6 +264,7 @@ async def test_alarm_update_weekdays_sorted(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json(
         {"type": "alarm_update", "id": 1, "weekdays": [6, 2, 0], "enabled": True}
     )
@@ -278,6 +283,7 @@ async def test_second_connection_replaces_first(
     first = await _auth(client)
     await first.receive_json()
     await first.receive_json()
+    await first.receive_json()  # now_playing
     second = await _auth(client)
     assert (await second.receive_json()) == {"type": "auth_ok"}
     msg = await asyncio.wait_for(first.receive(), 2)
@@ -310,6 +316,7 @@ async def test_state_stored_and_signalled(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await hass.async_block_till_done()
     n = len(calls)
     assert n >= 1  # attach
@@ -334,6 +341,7 @@ async def test_unload_closes_session(hass: HomeAssistant, hass_client_no_auth) -
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     assert await hass.config_entries.async_unload(entry.entry_id)
     msg = await asyncio.wait_for(ws.receive(), 2)
     assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED)
@@ -386,6 +394,7 @@ async def test_slow_handler_does_not_block(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     calls = []
     async_dispatcher_connect(hass, device.signal, lambda: calls.append(1))
     await ws.send_json({"type": "slow", "id": 1})
@@ -420,6 +429,7 @@ async def test_close_cancels_inflight_handler(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
     await ws.send_json({"type": "hang", "id": 1})
     await asyncio.wait_for(started.wait(), 2)
     await ws.close()
@@ -434,6 +444,7 @@ async def test_push_on_dead_transport_does_not_raise(
     ws = await _auth(await hass_client_no_auth())
     await ws.receive_json()
     await ws.receive_json()
+    await ws.receive_json()  # now_playing
 
     async def broken(_msg):
         raise ConnectionResetError("gone")

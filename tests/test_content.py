@@ -77,6 +77,7 @@ async def _connect(client):
     assert (await ws.receive_json())["type"] == "auth_ok"
     config = await ws.receive_json()
     assert config["type"] == "config"
+    assert (await ws.receive_json())["type"] == "now_playing"
     return ws, config
 
 

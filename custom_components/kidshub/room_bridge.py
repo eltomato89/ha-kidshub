@@ -38,7 +38,7 @@ def entity_state_message(entity_id: str, state: State | None) -> dict[str, Any]:
     msg: dict[str, Any] = {
         "type": "entity_state",
         "entity_id": entity_id,
-        "on": None,
+        "on": False,
         "brightness": None,
         "rgb": None,
         "position": None,
