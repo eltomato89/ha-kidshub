@@ -1,3 +1,36 @@
 {
-  "title": "KidsHub"
+  "title": "KidsHub",
+  "config": {
+    "step": {
+      "user": {
+        "title": "KidsHub",
+        "menu_options": {
+          "device": "Add device",
+          "settings": "Settings"
+        }
+      },
+      "device": {
+        "title": "Add device",
+        "description": "Which child is the device for?",
+        "data": {
+          "child_name": "Child's name"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "data": {
+          "tts_engine": "TTS engine",
+          "tts_language": "Language",
+          "tts_options": "TTS options (e.g. voice)"
+        }
+      }
+    },
+    "progress": {
+      "wait_pairing": "Enter the code {code} on the Echo."
+    },
+    "abort": {
+      "already_configured": "The settings already exist.",
+      "pairing_timeout": "Pairing timed out. Please try again."
+    }
+  }
 }

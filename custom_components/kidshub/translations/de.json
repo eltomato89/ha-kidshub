@@ -1,3 +1,36 @@
 {
-  "title": "KidsHub"
+  "title": "KidsHub",
+  "config": {
+    "step": {
+      "user": {
+        "title": "KidsHub",
+        "menu_options": {
+          "device": "Gerät hinzufügen",
+          "settings": "Einstellungen"
+        }
+      },
+      "device": {
+        "title": "Gerät hinzufügen",
+        "description": "Für welches Kind ist das Gerät?",
+        "data": {
+          "child_name": "Name des Kindes"
+        }
+      },
+      "settings": {
+        "title": "Einstellungen",
+        "data": {
+          "tts_engine": "TTS-Dienst",
+          "tts_language": "Sprache",
+          "tts_options": "TTS-Optionen (z. B. Stimme)"
+        }
+      }
+    },
+    "progress": {
+      "wait_pairing": "Gib auf dem Echo den Code {code} ein."
+    },
+    "abort": {
+      "already_configured": "Die Einstellungen sind bereits angelegt.",
+      "pairing_timeout": "Die Kopplung ist abgelaufen. Bitte erneut versuchen."
+    }
+  }
 }
