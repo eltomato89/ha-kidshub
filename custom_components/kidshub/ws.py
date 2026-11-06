@@ -118,6 +118,7 @@ class WsSession:
             if self._devices.get(device.device_id) is not device:
                 return  # entry unloaded meanwhile
             await self.send_json(device.config_message())
+            await device.on_connected()
             await self._loop(device)
         finally:
             device.detach(self)

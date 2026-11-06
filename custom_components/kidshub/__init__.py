@@ -21,6 +21,7 @@ from .const import (
 )
 from .device import KidDevice
 from .pairing import PairingRegistry
+from .room_bridge import RoomBridge
 from .views import PairView, WsView
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -76,8 +77,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.async_load()
         data.devices[entry.data[CONF_DEVICE_ID]] = device
         _track_sw_version(hass, entry, device)
+        bridge = RoomBridge(hass, device)
+        bridge.start()
+        entry.async_on_unload(bridge.stop)
+        entry.runtime_data = bridge
+        entry.async_on_unload(entry.add_update_listener(_async_options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Push the new config and resubscribe the room bridge (no reload)."""
+    device = hass.data[DOMAIN].devices.get(entry.data.get(CONF_DEVICE_ID))
+    bridge = getattr(entry, "runtime_data", None)
+    if device is None or bridge is None:
+        return
+    await device.push_config()
+    await bridge.refresh()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

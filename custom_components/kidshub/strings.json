@@ -149,5 +149,47 @@
         "name": "Cancel sleep timer"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "menu_options": {
+          "room": "Room",
+          "alarm_extras": "Alarm extras"
+        }
+      },
+      "room": {
+        "title": "Room",
+        "data": {
+          "room_entities": "Room entities"
+        }
+      },
+      "room_names": {
+        "title": "Room names",
+        "description": "Optional display name per entity."
+      },
+      "colors": {
+        "title": "Light colors",
+        "data": {
+          "color_1": "Color 1",
+          "color_2": "Color 2",
+          "color_3": "Color 3",
+          "color_4": "Color 4",
+          "color_5": "Color 5",
+          "color_6": "Color 6"
+        }
+      },
+      "alarm_extras": {
+        "title": "Alarm extras",
+        "data": {
+          "wake_lamp_entity": "Wake-up lamp",
+          "stop_button_entity": "Stop button"
+        }
+      }
+    },
+    "abort": {
+      "no_options": "This entry has no options."
+    }
   }
 }

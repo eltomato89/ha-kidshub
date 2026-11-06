@@ -6,7 +6,12 @@ import asyncio
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
@@ -20,6 +25,7 @@ from .const import (
     ENTRY_TYPE_DEVICE,
     ENTRY_TYPE_SETTINGS,
 )
+from .config_builder import DEFAULT_COLORS
 from .pairing import PAIRING_TTL, PendingPairing
 
 PAIRING_TIMEOUT: float = PAIRING_TTL
@@ -132,6 +138,14 @@ class KidsHubConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow (device entries only; settings abort)."""
+        if config_entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_DEVICE:
+            return DeviceOptionsFlow()
+        return SettingsOptionsFlow()
+
     @callback
     def async_remove(self) -> None:
         """Cancel an unfinished pairing when the flow goes away."""
@@ -139,3 +153,139 @@ class KidsHubConfigFlow(ConfigFlow, domain=DOMAIN):
             self._task.cancel()
         if self._pending is not None and not self._pending.done.is_set():
             async_get_data(self.hass).pairing.cancel(self._pending.code)
+
+
+ROOM_DOMAINS = ["light", "switch", "cover", "input_boolean", "fan"]
+STOP_BUTTON_DOMAINS = ["button", "input_button", "event", "binary_sensor"]
+
+# Menu of the device options flow; add a step by adding its id here and an
+# ``async_step_<id>`` method.
+OPTIONS_MENU = ["room", "alarm_extras"]
+
+
+def _suggested(key: str, value: Any) -> vol.Optional:
+    """Optional field whose current value is prefilled but clearable."""
+    if value is None:
+        return vol.Optional(key)
+    return vol.Optional(key, description={"suggested_value": value})
+
+
+class SettingsOptionsFlow(OptionsFlow):
+    """The settings entry has no options."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_abort(reason="no_options")
+
+
+class DeviceOptionsFlow(OptionsFlow):
+    """Options of one device: room entities, names, colors, alarm extras."""
+
+    def __init__(self) -> None:
+        self._options: dict[str, Any] = {}
+
+    def _save(self) -> ConfigFlowResult:
+        return self.async_create_entry(data=self._options)
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._options = dict(self.config_entry.options)
+        return self.async_show_menu(step_id="init", menu_options=OPTIONS_MENU)
+
+    async def async_step_room(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the room entities."""
+        if user_input is not None:
+            self._options["room_entities"] = list(user_input["room_entities"])
+            return await self.async_step_room_names()
+        return self.async_show_form(
+            step_id="room",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "room_entities",
+                        default=self._options.get("room_entities", []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=ROOM_DOMAINS, multiple=True
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_room_names(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Optionally name each room entity."""
+        entities: list[str] = self._options.get("room_entities", [])
+        old_names: dict[str, str] = self._options.get("room_names") or {}
+        if user_input is not None:
+            self._options["room_names"] = {
+                e: str(user_input[e]).strip()
+                for e in entities
+                if str(user_input.get(e) or "").strip()
+            }
+            return await self.async_step_colors()
+        return self.async_show_form(
+            step_id="room_names",
+            data_schema=vol.Schema(
+                {
+                    _suggested(e, old_names.get(e)): selector.TextSelector()
+                    for e in entities
+                }
+            ),
+        )
+
+    async def async_step_colors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the six light colors."""
+        current = self._options.get("colors") or DEFAULT_COLORS
+        keys = [f"color_{i + 1}" for i in range(len(DEFAULT_COLORS))]
+        if user_input is not None:
+            self._options["colors"] = [
+                [int(c) for c in user_input[k]] for k in keys
+            ]
+            return self._save()
+        return self.async_show_form(
+            step_id="colors",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(k, default=list(current[i])): selector.ColorRGBSelector()
+                    for i, k in enumerate(keys)
+                }
+            ),
+        )
+
+    async def async_step_alarm_extras(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the wake lamp and the stop button."""
+        if user_input is not None:
+            for key in ("wake_lamp_entity", "stop_button_entity"):
+                if user_input.get(key):
+                    self._options[key] = user_input[key]
+                else:
+                    self._options.pop(key, None)
+            return self._save()
+        return self.async_show_form(
+            step_id="alarm_extras",
+            data_schema=vol.Schema(
+                {
+                    _suggested(
+                        "wake_lamp_entity", self._options.get("wake_lamp_entity")
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="light")
+                    ),
+                    _suggested(
+                        "stop_button_entity", self._options.get("stop_button_entity")
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain=STOP_BUTTON_DOMAINS)
+                    ),
+                }
+            ),
+        )

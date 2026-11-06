@@ -88,6 +88,7 @@ class KidDevice:
         self.app_version: str | None = None
         self._session: WsSession | None = None
         self._handlers: dict[str, Handler] = {}
+        self._connected_callbacks: list[Callable[[], Awaitable[None]]] = []
         self.register_handler("alarm_update", self._handle_alarm_update)
 
     @property
@@ -169,6 +170,17 @@ class KidDevice:
     def register_handler(self, type_: str, handler: Handler) -> None:
         """Register the handler of an app request type."""
         self._handlers[type_] = handler
+
+    def register_connected_callback(
+        self, callback: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Register a coroutine to run right after ``config`` was sent on connect."""
+        self._connected_callbacks.append(callback)
+
+    async def on_connected(self) -> None:
+        """Run the connected callbacks (called by the session after ``config``)."""
+        for callback in list(self._connected_callbacks):
+            await callback()
 
     async def handle_request(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a request to its handler."""

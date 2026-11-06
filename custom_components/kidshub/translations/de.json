@@ -149,5 +149,47 @@
         "name": "Einschlaf-Timer abbrechen"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "menu_options": {
+          "room": "Zimmer",
+          "alarm_extras": "Wecker-Extras"
+        }
+      },
+      "room": {
+        "title": "Zimmer",
+        "data": {
+          "room_entities": "Zimmer-Entitäten"
+        }
+      },
+      "room_names": {
+        "title": "Namen im Zimmer",
+        "description": "Optionaler Anzeigename je Entität."
+      },
+      "colors": {
+        "title": "Lichtfarben",
+        "data": {
+          "color_1": "Farbe 1",
+          "color_2": "Farbe 2",
+          "color_3": "Farbe 3",
+          "color_4": "Farbe 4",
+          "color_5": "Farbe 5",
+          "color_6": "Farbe 6"
+        }
+      },
+      "alarm_extras": {
+        "title": "Wecker-Extras",
+        "data": {
+          "wake_lamp_entity": "Weck-Lampe",
+          "stop_button_entity": "Stopp-Taster"
+        }
+      }
+    },
+    "abort": {
+      "no_options": "Dieser Eintrag hat keine Optionen."
+    }
   }
 }
