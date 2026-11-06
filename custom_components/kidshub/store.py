@@ -102,6 +102,10 @@ class KidStore:
     def _schedule_save(self) -> None:
         self._store.async_delay_save(self._data_to_save, SAVE_DELAY)
 
+    async def async_flush(self) -> None:
+        """Persist pending data immediately."""
+        await self._store.async_save(self._data_to_save())
+
     @property
     def settings(self) -> dict[str, Any]:
         """Return a deep copy of the current settings."""

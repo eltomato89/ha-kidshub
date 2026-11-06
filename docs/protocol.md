@@ -34,8 +34,9 @@ Produktname **KidsHub**, HA-Domain `kidshub`.
 
 ### 2.1 Koppeln
 Request: `{"code": "123456", "app_version": "1.0.0", "device_model": "..."}`
-Response 200: `{"device_id": "<config entry id>", "token": "<token>", "child_name": "Paul"}`
+Response 200: `{"device_id": "<uuid4 hex, = unique_id des Config-Entries>", "token": "<token>", "child_name": "Paul"}`
 Response 403: `{"error": "invalid_code"}` (falscher oder abgelaufener Code, Gültigkeit 10 Min)
+Nach 10 Fehlversuchen werden alle offenen Kopplungen verworfen (Schutz gegen Durchprobieren). Antworten tragen `Cache-Control: no-store`.
 
 ## 3. WebSocket
 
