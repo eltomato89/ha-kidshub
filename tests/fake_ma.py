@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from custom_components.kidshub.device import MaUnavailable
+import asyncio
+
+from custom_components.kidshub.device import InvalidRequest, MaUnavailable
 from custom_components.kidshub.ma import MaItem, QueueSnapshot
 
 
@@ -41,8 +43,10 @@ class FakeMa:
         children: dict[str, list[MaItem]] | None = None,
         sendspin: dict[str, Any] | None = None,
         players: dict[str, str] | None = None,
+        stall_library: bool = False,
     ) -> None:
         self.available = available
+        self._stall_library = stall_library  # library() never returns
         self._library = library or {}
         self._children = children or {}
         self._sendspin = sendspin
@@ -59,6 +63,8 @@ class FakeMa:
 
     async def library(self, kind: str) -> list[MaItem]:
         self._check()
+        if self._stall_library:
+            await asyncio.Event().wait()
         return list(self._library.get(kind, []))
 
     async def children(self, uri: str) -> list[MaItem]:
@@ -72,7 +78,7 @@ class FakeMa:
             for it in items:
                 if it.uri == uri:
                     return it
-        raise KeyError(uri)
+        raise InvalidRequest(f"media not found: {uri}")
 
     def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
         return self._sendspin

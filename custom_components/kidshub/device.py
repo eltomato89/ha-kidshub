@@ -19,6 +19,7 @@ from .const import CONF_CHILD_NAME, CONF_DEVICE_ID, CONF_TOKEN_HASH, DOMAIN
 from .store import KidStore
 
 if TYPE_CHECKING:
+    from .content import ContentService
     from .ws import WsSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +88,8 @@ class KidDevice:
         self.last_state: dict[str, Any] | None = None
         self.app_version: str | None = None
         self._session: WsSession | None = None
+        # content requests and allowlist; set by the entry setup
+        self.content: ContentService | None = None
         self._handlers: dict[str, Handler] = {}
         self._connected_callbacks: list[Callable[[], Awaitable[None]]] = []
         self.register_handler("alarm_update", self._handle_alarm_update)

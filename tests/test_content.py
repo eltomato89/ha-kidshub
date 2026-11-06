@@ -369,3 +369,177 @@ async def test_ma_adapter_converts_client_items(hass: HomeAssistant) -> None:
 
     mass.connection.connected = False
     assert adapter.available is False
+
+
+ALBUM = item("library://album/1", "album", "Hörspiel", "Erzähler")
+CHAPTER = item("library://track/k1", "album_track", "Kapitel 1")
+
+
+def _fake_with_album() -> FakeMa:
+    fake = _fake()
+    fake._library["album"] = [ALBUM]
+    fake._children[ALBUM.uri] = [CHAPTER]
+    return fake
+
+
+async def test_rate_spoofed_kind_invalid(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass, _fake())
+    ws, _ = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "rate", uri=TRACK_A.uri, kind="episode", stars=5)
+    assert res["error"]["code"] == "invalid"
+    # a playlist is no track
+    res = await _request(ws, 2, "rate", uri=PL1.uri, kind="track", stars=5)
+    assert res["error"]["code"] == "invalid"
+    assert hass.data[DOMAIN].devices["dev-a"].store.ratings() == []
+    await ws.close()
+
+
+async def test_rate_album_track_invalid_album_container_ok(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass, _fake_with_album(), {**OPTIONS, "audiobooks": [ALBUM.uri]})
+    ws, _ = await _connect(await hass_client_no_auth())
+    for id_, kind in ((1, "album_track"), (2, "track")):
+        res = await _request(ws, id_, "rate", uri=CHAPTER.uri, kind=kind, stars=5)
+        assert res["error"]["code"] == "invalid"
+    res = await _request(ws, 3, "rate", uri=ALBUM.uri, kind="album", stars=5)
+    assert res["success"] is True, res
+    (rec,) = hass.data[DOMAIN].devices["dev-a"].store.ratings()
+    assert (rec.kind, rec.title, rec.subtitle) == ("album", "Hörspiel", "Erzähler")
+    res = await _request(ws, 4, "favorites", kind="audiobook")
+    assert _uris(res) == [ALBUM.uri]
+    assert res["result"]["items"][0]["kind"] == "album"
+    assert _uris(await _request(ws, 5, "favorites", kind="track")) == []
+    await ws.close()
+
+
+async def test_ma_adapter_times_out(hass: HomeAssistant) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    from custom_components.kidshub import ma as ma_module
+    from custom_components.kidshub.device import MaUnavailable
+
+    async def never(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    mass = _fake_client()
+    mass.music.get_library_playlists = never
+    mass.music.get_playlist_tracks = never
+    entry = MockConfigEntry(
+        domain="music_assistant",
+        data={"url": "http://192.168.1.10:8095"},
+        state=ConfigEntryState.LOADED,
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(mass=mass, listen_task=Mock())
+    adapter = MaAdapter(hass)
+    with (
+        patch.object(ma_module, "MA_TIMEOUT", 0.05),
+        patch.object(ma_module, "LIBRARY_TIMEOUT", 0.05),
+    ):
+        async with asyncio.timeout(2):
+            with pytest.raises(MaUnavailable):
+                await adapter.library("playlist")
+            with pytest.raises(MaUnavailable):
+                await adapter.children("spotify://playlist/p1")
+
+
+async def test_browse_ma_stall_gives_ma_unavailable(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """A stalled MA call ends as ma_unavailable instead of hanging the request."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    from custom_components.kidshub import ma as ma_module
+
+    async def never(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    mass = _fake_client()
+    mass.music.get_library_playlists = never
+    ma_entry = MockConfigEntry(
+        domain="music_assistant",
+        data={"url": "http://192.168.1.10:8095"},
+        state=ConfigEntryState.LOADED,
+    )
+    ma_entry.add_to_hass(hass)
+    ma_entry.runtime_data = SimpleNamespace(mass=mass, listen_task=Mock())
+    await _setup(hass, MaAdapter(hass))
+    ws, _ = await _connect(await hass_client_no_auth())
+    with patch.object(ma_module, "LIBRARY_TIMEOUT", 0.05):
+        res = await _request(ws, 1, "browse", section="music", sort="default")
+    assert res["error"]["code"] == "ma_unavailable"
+    await ws.close()
+
+
+async def test_options_content_stall_ma_unavailable(hass: HomeAssistant) -> None:
+    from unittest.mock import patch
+
+    from custom_components.kidshub import config_flow
+
+    entry = await _setup(hass, _fake(stall_library=True))
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    with patch.object(config_flow, "LIBRARY_TIMEOUT", 0.05):
+        async with asyncio.timeout(2):
+            flow = await hass.config_entries.options.async_configure(
+                flow["flow_id"], {"next_step_id": "content"}
+            )
+    assert flow["errors"] == {"base": "ma_unavailable"}
+
+
+def test_image_registry_bounded() -> None:
+    from custom_components.kidshub.content import (
+        IMAGE_REGISTRY_SIZE,
+        ImageRegistry,
+    )
+
+    assert IMAGE_REGISTRY_SIZE == 2000
+    reg = ImageRegistry(maxsize=3)
+    for url in ("a", "b", "c"):
+        reg.add(url)
+    reg.add("a")  # refresh "a"; "b" is now the oldest
+    reg.add("d")
+    assert len(reg) == 3
+    assert "b" not in reg
+    assert all(u in reg for u in ("a", "c", "d"))
+    full = ImageRegistry()
+    for i in range(IMAGE_REGISTRY_SIZE + 10):
+        full.add(f"http://x/{i}")
+    assert len(full) == IMAGE_REGISTRY_SIZE
+    assert "http://x/0" not in full
+
+
+async def test_emitted_images_are_known(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass, _fake())
+    content = hass.data[DOMAIN].devices["dev-a"].content
+    assert content is not None
+    assert not content.is_known_image("http://ma.local:8095/imageproxy/x")
+    ws, _ = await _connect(await hass_client_no_auth())
+    await _request(ws, 1, "browse", section="music", sort="default")
+    assert content.is_known_image("http://ma.local:8095/imageproxy/x")
+    assert "http://ma.local:8095/imageproxy/x" in hass.data[DOMAIN].images
+    assert not content.is_known_image("http://evil.example/x")
+    await ws.close()
+
+
+async def test_favorites_register_stored_images(hass: HomeAssistant) -> None:
+    """Images of stored ratings (e.g. after a restart) become known again."""
+    await _setup(hass, _fake())
+    device = hass.data[DOMAIN].devices["dev-a"]
+    device.store.set_rating(
+        TRACK_A.uri, "track", 5, "A", "Band",
+        "/api/kidshub/img?u=http%3A%2F%2Fcdn.example%2Fa.jpg&s=256",
+    )
+    assert not device.content.is_known_image("http://cdn.example/a.jpg")
+    device.content.favorites("track")
+    assert device.content.is_known_image("http://cdn.example/a.jpg")

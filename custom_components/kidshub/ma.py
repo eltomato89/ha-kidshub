@@ -33,6 +33,7 @@ name (``KidsHub <child>``) in case an MA version derives the id differently.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -63,6 +64,8 @@ _LOGGER = logging.getLogger(__name__)
 MA_DOMAIN = "music_assistant"
 SENDSPIN_PORT = 8927
 PAGE_SIZE = 500
+MA_TIMEOUT = 10.0  # seconds per MA request
+LIBRARY_TIMEOUT = 30.0  # seconds for a whole (paged) library listing
 
 LibraryKind = Literal["playlist", "album", "audiobook", "podcast"]
 Command = Literal["pause", "resume", "next", "previous", "stop"]
@@ -186,17 +189,19 @@ class MaAdapter:
         return True
 
     @asynccontextmanager
-    async def _guard(self) -> AsyncIterator[None]:
-        """Map client errors to the KidsHub request errors."""
+    async def _guard(self, timeout: float | None = None) -> AsyncIterator[None]:
+        """Bound the MA calls in time and map client errors to request errors."""
         try:
-            yield
+            async with asyncio.timeout(MA_TIMEOUT if timeout is None else timeout):
+                yield
         except MediaNotFoundError as err:
             raise InvalidRequest(str(err) or "media not found") from err
+        except TimeoutError as err:
+            raise MaUnavailable("Music Assistant did not answer in time") from err
         except (
             MusicAssistantClientException,
             MusicAssistantError,
             ConnectionError,
-            TimeoutError,
         ) as err:
             raise MaUnavailable(str(err) or "Music Assistant request failed") from err
 
@@ -242,7 +247,7 @@ class MaAdapter:
             raise InvalidRequest(f"unknown library kind: {kind}")
         fetch = getattr(mass.music, _LIBRARY_FETCH[kind])
         result: list[MaItem] = []
-        async with self._guard():
+        async with self._guard(LIBRARY_TIMEOUT):
             offset = 0
             while True:
                 page = await fetch(limit=PAGE_SIZE, offset=offset)

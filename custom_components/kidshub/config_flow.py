@@ -27,6 +27,7 @@ from .const import (
 )
 from .config_builder import DEFAULT_COLORS
 from .device import MaUnavailable
+from .ma import LIBRARY_TIMEOUT
 from .pairing import PAIRING_TTL, PendingPairing
 
 PAIRING_TIMEOUT: float = PAIRING_TTL
@@ -310,15 +311,16 @@ class DeviceOptionsFlow(OptionsFlow):
         try:
             if ma is None or not ma.available:
                 raise MaUnavailable("Music Assistant is not available")
-            libraries = {
-                key: [
-                    item
-                    for lib in await asyncio.gather(*(ma.library(k) for k in kinds))
-                    for item in lib
-                ]
-                for key, kinds in CONTENT_LIBRARIES.items()
-            }
-        except MaUnavailable:
+            async with asyncio.timeout(LIBRARY_TIMEOUT):
+                libraries = {
+                    key: [
+                        item
+                        for lib in await asyncio.gather(*(ma.library(k) for k in kinds))
+                        for item in lib
+                    ]
+                    for key, kinds in CONTENT_LIBRARIES.items()
+                }
+        except (MaUnavailable, TimeoutError):
             return self.async_show_form(
                 step_id="content",
                 data_schema=vol.Schema({}),

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 from .device import InvalidRequest, KidDevice, NotAllowed
 from .sorting import sort_episodes, sort_tracks
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 FAVORITES_PREFIX = "kidshub://favorites/"
 FAVORITES_MIN_STARS = 4
 CHILDREN_TTL = 60.0
+IMAGE_REGISTRY_SIZE = 2000
 
 # section -> (option key, library kinds, favorites kind)
 SECTIONS: dict[str, tuple[str, tuple[str, ...], str]] = {
@@ -31,24 +33,58 @@ FAVORITE_KINDS: dict[str, tuple[str, ...]] = {
     "episode": ("episode",),
     "audiobook": ("audiobook", "album"),
 }
-RATE_KINDS = {"track", "album_track", "episode", "audiobook", "album"}
+# Rateable kinds. Album tracks (Hörspiel chapters) are not rated themselves; the app
+# rates the album/audiobook container instead.
+RATE_KINDS = {"track", "episode", "audiobook", "album"}
 PROGRESS_KINDS = {"episode", "audiobook", "album"}
 SORTS = {"default", "stars"}
 
 
 def image_url(image: str | None, size: int = 256) -> str | None:
-    """Rewrite an MA image URL to the KidsHub image proxy."""
+    """Rewrite an MA image URL to the KidsHub image proxy (pure, no registration)."""
     if not image:
         return None
     return f"/api/kidshub/img?u={quote(image, safe='')}&s={size}"
 
 
+def _proxied_source(url: str | None) -> str | None:
+    """Return the absolute image URL inside a ``/api/kidshub/img`` URL."""
+    if not url:
+        return None
+    values = parse_qs(urlparse(url).query).get("u")
+    return values[0] if values else None
+
+
+class ImageRegistry:
+    """Bounded LRU set of absolute image URLs that were handed to an app."""
+
+    def __init__(self, maxsize: int = IMAGE_REGISTRY_SIZE) -> None:
+        self.maxsize = maxsize
+        self._urls: OrderedDict[str, None] = OrderedDict()
+
+    def add(self, url: str) -> None:
+        """Remember ``url`` (most recently used), evicting the oldest entries."""
+        self._urls[url] = None
+        self._urls.move_to_end(url)
+        while len(self._urls) > self.maxsize:
+            self._urls.popitem(last=False)
+
+    def __contains__(self, url: object) -> bool:
+        return url in self._urls
+
+    def __len__(self) -> int:
+        return len(self._urls)
+
+
 class ContentService:
     """Browse, favorites and ratings against the content allowlist of a device."""
 
-    def __init__(self, device: KidDevice, ma: MaAdapter) -> None:
+    def __init__(
+        self, device: KidDevice, ma: MaAdapter, images: ImageRegistry | None = None
+    ) -> None:
         self.device = device
         self.ma = ma
+        self.images = images if images is not None else ImageRegistry()
         # Item currently playing on this device; set by the playback code so that
         # it can be rated even when it is not part of an allowed container.
         self.now_playing: MaItem | None = None
@@ -105,6 +141,18 @@ class ContentService:
         """Return whether ``uri`` may be rated/played on this device."""
         return await self.find_allowed_item(uri) is not None
 
+    # -- images -----------------------------------------------------------
+
+    def image_url(self, image: str | None, size: int = 256) -> str | None:
+        """Proxy URL for ``image``; the absolute URL is registered as emitted."""
+        if image:
+            self.images.add(image)
+        return image_url(image, size)
+
+    def is_known_image(self, url: str) -> bool:
+        """Return whether ``url`` was emitted to an app (image proxy allowlist)."""
+        return url in self.images
+
     # -- items ------------------------------------------------------------
 
     def _progress(self, uri: str, duration_ms: int) -> dict[str, Any]:
@@ -124,7 +172,7 @@ class ContentService:
             "kind": it.kind,
             "title": it.title,
             "subtitle": it.subtitle,
-            "image_url": image_url(it.image, size),
+            "image_url": self.image_url(it.image, size),
             "stars": self.device.store.get_rating(it.uri),
         }
         if it.kind in PROGRESS_KINDS:
@@ -150,6 +198,8 @@ class ContentService:
         for rec in self.device.store.ratings():
             if rec.kind not in kinds or rec.stars < FAVORITES_MIN_STARS:
                 continue
+            if source := _proxied_source(rec.image_url):
+                self.images.add(source)
             item: dict[str, Any] = {
                 "uri": rec.uri,
                 "kind": rec.kind,
@@ -225,13 +275,16 @@ class ContentService:
         found = await self.find_allowed_item(uri)
         if found is None:
             raise NotAllowed("content not allowed")
+        if found.kind != kind:
+            # also rejects album tracks: their container is rated instead
+            raise InvalidRequest(f"uri is a {found.kind}, not a {kind}")
         self.device.store.set_rating(
             uri,
-            kind,
+            found.kind,
             stars,
             found.title,
             found.subtitle,
-            image_url(found.image),
+            self.image_url(found.image),
         )
         self.device.notify()
         return {}

@@ -19,7 +19,7 @@ from .const import (
     ENTRY_TYPE_DEVICE,
     PLATFORMS,
 )
-from .content import ContentService
+from .content import ContentService, ImageRegistry
 from .device import KidDevice
 from .ma import MaAdapter
 from .pairing import PairingRegistry
@@ -37,6 +37,7 @@ class KidsHubData:
     pairing: PairingRegistry = field(default_factory=PairingRegistry)
     views_registered: bool = False
     ma: MaAdapter | None = None  # set in async_setup; tests inject a fake
+    images: ImageRegistry = field(default_factory=ImageRegistry)  # emitted image URLs
 
 
 def async_get_data(hass: HomeAssistant) -> KidsHubData:
@@ -83,7 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data.devices[entry.data[CONF_DEVICE_ID]] = device
         _track_sw_version(hass, entry, device)
         assert data.ma is not None
-        ContentService(device, data.ma)
+        device.content = ContentService(device, data.ma, data.images)
         bridge = RoomBridge(hass, device)
         bridge.start()
         entry.async_on_unload(bridge.stop)
