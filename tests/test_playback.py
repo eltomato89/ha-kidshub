@@ -154,7 +154,8 @@ async def test_play_finished_episode_starts_over(
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[EP1.uri])
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [EP1.uri], 0, 0)]
+    # R24: 1 s instead of 0, MA would jump to its own saved position at 0
+    assert fake.play_calls == [(PLAYER, [EP1.uri], 0, 1000)]
     await ws.close()
 
 
@@ -166,7 +167,7 @@ async def test_play_from_start(hass: HomeAssistant, hass_client_no_auth) -> None
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[BOOK.uri], from_start=True)
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [BOOK.uri], 0, 0)]
+    assert fake.play_calls == [(PLAYER, [BOOK.uri], 0, 1000)]
     rec = store.get_progress(BOOK.uri)
     assert rec.position_ms == 0
     assert rec.finished is False
@@ -202,7 +203,7 @@ async def test_play_album_without_progress(
     ws = await _connect(await hass_client_no_auth())
     res = await _request(ws, 1, "play", uris=[ALBUM.uri], resume=False)
     assert res["success"] is True, res
-    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS], 0, 0)]
+    assert fake.play_calls == [(PLAYER, [t.uri for t in ALBUM_TRACKS], 0, 1000)]
     await ws.close()
 
 
@@ -934,4 +935,19 @@ async def test_wake_play_timeout_clears_album_context(
     assert res["error"]["code"] == "ma_unavailable"
     # MA may still start the wake music: the album context must not outlive it
     assert device.store.album_context is None
+    await ws.close()
+
+
+async def test_play_without_progress_seeks_one_second(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """R24: audiobooks/episodes/albums never start at 0 (MA's own resume); music does."""
+    fake = _fake()
+    await _setup(hass, fake)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "play", uris=[EP2.uri]))["success"]
+    assert (await _request(ws, 2, "play", uris=[BOOK.uri], resume=False))["success"]
+    assert (await _request(ws, 3, "play", uris=[PL1.uri]))["success"]
+    assert (await _request(ws, 4, "play", uris=[TRACK_A.uri]))["success"]
+    assert [c[3] for c in fake.play_calls] == [1000, 1000, 0, 0]
     await ws.close()

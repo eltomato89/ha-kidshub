@@ -128,6 +128,8 @@ async def test_image_scaled(hass: HomeAssistant, hass_client_no_auth, source) ->
     resp = await client.get("/api/kidshub/img", params={"u": url, "s": "256"}, headers=AUTH)
     assert resp.status == 200
     assert resp.content_type == "image/jpeg"
+    # the app keeps covers in its disk cache for a day
+    assert resp.headers["Cache-Control"] == "private, max-age=86400"
     img = Image.open(io.BytesIO(await resp.read()))
     assert img.format == "JPEG"
     assert img.width <= 256 and img.height <= 256
@@ -297,6 +299,7 @@ async def test_tts_cached(hass: HomeAssistant, hass_client_no_auth) -> None:
     resp = await client.get(first["url"], headers=AUTH)
     assert resp.status == 200
     assert resp.content_type == "audio/mpeg"
+    assert resp.headers["Cache-Control"] == "private, max-age=86400"
     assert await resp.read() == b"ID3audio"
     assert (await client.get(first["url"])).status == 401
     assert (

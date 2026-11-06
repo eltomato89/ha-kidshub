@@ -74,8 +74,8 @@ Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit B
          {"entity_id":"light.paul_lese","name":"Leselampe","icon":"mdi:lamp",
           "kind":"color","colors":[[255,92,92],[255,210,63],[76,217,123],[155,107,255],[58,160,255],[255,243,214]]}]}
 ```
-`sendspin.url` leitet die Integration aus der URL des MA-Config-Entries ab (Host, Port
-`8927`, Pfad `/sendspin`). Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
+`sendspin.url` leitet die Integration aus der von MA selbst gemeldeten Basis-Adresse ab (`/info` → `base_url`; Host, Port
+`8927`, Pfad `/sendspin`), nicht aus der Entry-URL (die kann ein Container-Name sein). Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
 Sendspin-Client-ID; MA führt den Player unter genau dieser ID.
 
 `kind` ∈ `switch` | `dimmer` | `cover` | `color`.
@@ -148,7 +148,7 @@ Sonnenaufgangs alle 15 s)
 - Ist `music_enabled` false und der Inhalt Musik → Fehler `not_allowed`.
 - `resume=true` bei `episode` / `audiobook` / `album`: Die Integration startet an der
   gespeicherten Stelle (Track-Index + Position). `from_start=true` setzt die Stelle auf 0 zurück.
-- Gespielt wird über MA auf **dem Sendspin-Player dieses Geräts** (MA-`player_id` = `sendspin.client_id`).
+- Gespielt wird über MA auf **dem Sendspin-Player dieses Geräts**. MA ≥ 2.10 vergibt dafür eine eigene `player_id`; die Integration findet den Player über `sendspin.client_id` in dessen `output_protocols` (Fallback: Name).
 
 ## 3.4 TTS
 Die Integration erzeugt Ansagen über die **in HA eingerichtete TTS-Engine** (Entität aus den

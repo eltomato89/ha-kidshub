@@ -14,6 +14,7 @@ from .tts_cache import CONTENT_TYPES, NAME_RE
 from .ws import HEARTBEAT, MAX_MSG_SIZE, WsSession
 
 NO_STORE = {"Cache-Control": "no-store"}
+CACHE_DAY = {"Cache-Control": "private, max-age=86400"}  # app disk cache
 
 
 class PairView(HomeAssistantView):
@@ -113,7 +114,7 @@ class ImageView(HomeAssistantView):
         return web.Response(
             body=body,
             content_type="image/jpeg",
-            headers={"Cache-Control": "private, max-age=3600"},
+            headers=CACHE_DAY,
         )
 
 
@@ -136,5 +137,5 @@ class TtsView(HomeAssistantView):
         return web.Response(
             body=body,
             content_type=CONTENT_TYPES[name.rsplit(".", 1)[1]],
-            headers={"Cache-Control": "private, max-age=86400"},
+            headers=CACHE_DAY,
         )

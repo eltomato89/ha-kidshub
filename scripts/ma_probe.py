@@ -265,7 +265,9 @@ def summarize_queue(q: dict[str, Any]) -> dict[str, Any]:
 # -- minimal Sendspin player (audio is discarded) ---------------------------------
 
 
-async def sendspin_client(url: str, client_id: str, name: str, ready: asyncio.Event) -> None:
+async def sendspin_client(
+    url: str, client_id: str, name: str, ready: asyncio.Event, volume: int = 5
+) -> None:
     """Keep a Sendspin player connected (docs/sendspin.md of the app: transition mode)."""
 
     def msg(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -300,7 +302,7 @@ async def sendspin_client(url: str, client_id: str, name: str, ready: asyncio.Ev
                     {
                         "available": True,
                         "player": {
-                            "volume": 5,
+                            "volume": volume,
                             "output_delay_ms": 0,
                             "required_lead_time_ms": 500,
                             "min_buffer_ms": 300,

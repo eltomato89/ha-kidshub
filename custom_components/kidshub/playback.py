@@ -40,6 +40,8 @@ PUSH_INTERVAL = 10.0  # seconds between now_playing pushes of the same item
 SAVE_INTERVAL = 10.0  # seconds between progress saves of the same item
 FINISHED_MARGIN_MS = 30000
 RETRY_DELAYS = (1, 2, 5, 10, 30, 60)  # seconds, queue subscription backoff
+FROM_START_SEEK_MS = 1000  # MA treats seek 0 as "resume at MA's own position"
+FROM_START_KINDS = {"album", "episode", "audiobook"}
 
 MUSIC_KINDS = {"track", "playlist"}
 CONTAINER_KINDS = {"playlist", "album", "podcast"}
@@ -261,6 +263,10 @@ class PlaybackService:
             if first.kind in ("episode", "audiobook"):
                 _, seek_ms = self._resume_point(first, resume, from_start, 1)
             queue.append(first.uri)
+        if first.kind in FROM_START_KINDS and seek_ms <= 0:
+            # Ruling R24: at seek 0 MA resumes audiobooks/episodes at its own
+            # saved position (play_index), so "from the beginning" is 1 s.
+            seek_ms = FROM_START_SEEK_MS
         queue.extend(i.uri for i in rest)
         await self._play(queue, index, album, seek_ms)
         return {}
