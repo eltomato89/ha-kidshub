@@ -317,3 +317,111 @@ async def test_unload_closes_session(hass: HomeAssistant, hass_client_no_auth) -
     msg = await asyncio.wait_for(ws.receive(), 2)
     assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED)
     assert "dev-a" not in hass.data[DOMAIN].devices
+
+
+@lingering_heartbeat
+async def test_auth_deadline_is_absolute(
+    hass: HomeAssistant, hass_client_no_auth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ws_module, "AUTH_TIMEOUT", 0.3)
+    await _setup(hass)
+    ws = await (await hass_client_no_auth()).ws_connect(WS_URL)
+
+    async def spam() -> None:
+        while True:
+            await ws.ping()
+            await ws.send_bytes(b"x")
+            await asyncio.sleep(0.05)
+
+    task = asyncio.create_task(spam())
+    try:
+        msg = await asyncio.wait_for(ws.receive(), 2)
+        if msg.type is WSMsgType.TEXT:
+            assert msg.json() == {"type": "auth_invalid"}
+            msg = await asyncio.wait_for(ws.receive(), 2)
+        assert msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    await ws.close()
+    await asyncio.sleep(0.05)
+
+
+async def test_slow_handler_does_not_block(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+    await _setup(hass)
+    device = hass.data[DOMAIN].devices["dev-a"]
+    release = asyncio.Event()
+
+    async def slow(msg):
+        await release.wait()
+        return {}
+
+    async def fast(msg):
+        return {"fast": True}
+
+    device.register_handler("slow", slow)
+    device.register_handler("fast", fast)
+    ws = await _auth(await hass_client_no_auth())
+    await ws.receive_json()
+    await ws.receive_json()
+    calls = []
+    async_dispatcher_connect(hass, device.signal, lambda: calls.append(1))
+    await ws.send_json({"type": "slow", "id": 1})
+    await ws.send_json({"type": "state", "playback": "idle"})
+    await ws.send_json({"type": "fast", "id": 2})
+    res = await asyncio.wait_for(ws.receive_json(), 2)
+    assert res["id"] == 2 and res["result"] == {"fast": True}
+    assert device.last_state == {"type": "state", "playback": "idle"}
+    assert calls
+    release.set()
+    assert (await asyncio.wait_for(ws.receive_json(), 2))["id"] == 1
+    await ws.close()
+
+
+async def test_close_cancels_inflight_handler(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass)
+    device = hass.data[DOMAIN].devices["dev-a"]
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hang(msg):
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    device.register_handler("hang", hang)
+    ws = await _auth(await hass_client_no_auth())
+    await ws.receive_json()
+    await ws.receive_json()
+    await ws.send_json({"type": "hang", "id": 1})
+    await asyncio.wait_for(started.wait(), 2)
+    await ws.close()
+    await asyncio.wait_for(cancelled.wait(), 2)
+
+
+async def test_push_on_dead_transport_does_not_raise(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    await _setup(hass)
+    device = hass.data[DOMAIN].devices["dev-a"]
+    ws = await _auth(await hass_client_no_auth())
+    await ws.receive_json()
+    await ws.receive_json()
+
+    async def broken(_msg):
+        raise ConnectionResetError("gone")
+
+    session = device._session
+    session._ws.send_json = broken
+    await device.push({"type": "config"})
+    await device.update_settings({"max_volume": 40})
+    await ws.close()

@@ -14,6 +14,7 @@ from .device import (
     KidDevice,
     MaUnavailable,
     NotAllowed,
+    PushConfig,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,22 +42,32 @@ class WsSession:
         self._ws = ws
         self._devices = devices
         self.device: KidDevice | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._send_lock = asyncio.Lock()
 
     async def send_json(self, msg: dict[str, Any]) -> None:
-        """Send a message unless the socket is closing."""
-        if not self._ws.closed:
-            await self._ws.send_json(msg)
+        """Send a message; a gone transport counts as offline (never raises)."""
+        if self._ws.closed:
+            return
+        try:
+            async with self._send_lock:
+                await self._ws.send_json(msg)
+        except (ConnectionError, RuntimeError) as err:
+            _LOGGER.debug("Send failed, treating device as offline: %s", err)
 
     async def close(self) -> None:
         """Close the socket."""
-        await self._ws.close()
+        try:
+            await self._ws.close()
+        except (ConnectionError, RuntimeError) as err:
+            _LOGGER.debug("Close failed: %s", err)
 
-    async def _read_json(self, timeout: float | None = None) -> Any:
+    async def _read_json(self) -> Any:
         """Return the next JSON message, or None when closed/unusable."""
         while True:
             try:
-                msg = await self._ws.receive(timeout=timeout)
-            except TimeoutError:
+                msg = await self._ws.receive()
+            except (ConnectionError, RuntimeError):
                 return None
             if msg.type is WSMsgType.TEXT:
                 try:
@@ -73,7 +84,13 @@ class WsSession:
             # ignore binary and other frames
 
     async def _authenticate(self) -> KidDevice | None:
-        msg = await self._read_json(AUTH_TIMEOUT)
+        try:
+            # Absolute deadline for the whole handshake, regardless of
+            # pings or binary frames sent in between.
+            async with asyncio.timeout(AUTH_TIMEOUT):
+                msg = await self._read_json()
+        except TimeoutError:
+            return None
         if not isinstance(msg, dict) or msg.get("type") != "auth":
             return None
         device_id = msg.get("device_id")
@@ -96,41 +113,58 @@ class WsSession:
         try:
             await self.send_json({"type": "auth_ok"})
             await device.attach(self)
+            if self._devices.get(device.device_id) is not device:
+                return  # entry unloaded meanwhile
             await self.send_json(device.config_message())
             await self._loop(device)
         finally:
             device.detach(self)
-            await self._ws.close()
+            tasks = list(self._tasks)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            await self.close()
 
     async def _loop(self, device: KidDevice) -> None:
         while (msg := await self._read_json()) is not None:
             if not isinstance(msg, dict):
                 continue
-            type_ = msg.get("type")
-            if type_ == "state":
+            if msg.get("type") == "state":
                 await device.async_on_state(msg)
                 continue
             id_ = msg.get("id")
             if isinstance(id_, bool) or not isinstance(id_, int):
                 continue  # not a request, nothing to answer
-            try:
-                result = await device.handle_request(msg)
-                reply: dict[str, Any] = {
-                    "type": "result",
-                    "id": id_,
-                    "success": True,
-                    "result": result,
-                }
-            except NotAllowed as err:
-                reply = _error(id_, "not_allowed", str(err))
-            except MaUnavailable as err:
-                reply = _error(id_, "ma_unavailable", str(err))
-            except InvalidRequest as err:
-                reply = _error(id_, "invalid", str(err))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _LOGGER.exception("Request %s failed", type_)
-                reply = _error(id_, "invalid", "request failed")
-            await self.send_json(reply)
-            await device.flush_deferred_push()
+            task = asyncio.create_task(self._run_request(device, msg, id_))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _run_request(
+        self, device: KidDevice, msg: dict[str, Any], id_: int
+    ) -> None:
+        type_ = msg.get("type")
+        push_config = False
+        try:
+            result = await device.handle_request(msg)
+            push_config = isinstance(result, PushConfig)
+            reply: dict[str, Any] = {
+                "type": "result",
+                "id": id_,
+                "success": True,
+                "result": dict(result),
+            }
+        except NotAllowed as err:
+            reply = _error(id_, "not_allowed", str(err))
+        except MaUnavailable as err:
+            reply = _error(id_, "ma_unavailable", str(err))
+        except InvalidRequest as err:
+            reply = _error(id_, "invalid", str(err))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.exception("Request %s failed", type_)
+            reply = _error(id_, "invalid", "request failed")
+        await self.send_json(reply)
+        if push_config:
+            await device.push_config()

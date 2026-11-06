@@ -29,6 +29,10 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ALARM_KEYS = {"enabled", "time", "weekdays", "with_light"}
 
 
+class PushConfig(dict):  # type: ignore[type-arg]
+    """Handler result that asks the session to push the config after the result."""
+
+
 class NotAllowed(Exception):
     """The requested action or content is not permitted (code ``not_allowed``)."""
 
@@ -82,7 +86,6 @@ class KidDevice:
         self.config_version = 1
         self.last_state: dict[str, Any] | None = None
         self._session: WsSession | None = None
-        self._push_pending = False
         self._handlers: dict[str, Handler] = {}
         self.register_handler("alarm_update", self._handle_alarm_update)
 
@@ -151,28 +154,16 @@ class KidDevice:
     async def push_config(self) -> None:
         """Bump the config version and push the new config."""
         self.config_version += 1
-        self._push_pending = False
         await self.push(self.config_message())
 
-    async def flush_deferred_push(self) -> None:
-        """Push a config whose push was deferred until after a result."""
-        if self._push_pending:
-            await self.push_config()
+    async def update_settings(self, patch: dict[str, Any]) -> None:
+        """Merge ``patch`` into the settings, notify and push the config."""
+        await self._apply_settings(patch)
+        await self.push_config()
 
-    async def update_settings(
-        self, patch: dict[str, Any], *, defer_push: bool = False
-    ) -> None:
-        """Merge ``patch`` into the settings, notify and push the config.
-
-        With ``defer_push`` the config push waits for ``flush_deferred_push``
-        so a request's ``result`` can be sent first.
-        """
+    async def _apply_settings(self, patch: dict[str, Any]) -> None:
         await self.store.async_update_settings(copy.deepcopy(patch))
         self._notify()
-        if defer_push:
-            self._push_pending = True
-        else:
-            await self.push_config()
 
     def register_handler(self, type_: str, handler: Handler) -> None:
         """Register the handler of an app request type."""
@@ -192,5 +183,5 @@ class KidDevice:
 
     async def _handle_alarm_update(self, msg: dict[str, Any]) -> dict[str, Any]:
         patch = _parse_alarm_patch(msg)
-        await self.update_settings({"alarm": patch}, defer_push=True)
-        return {}
+        await self._apply_settings({"alarm": patch})
+        return PushConfig()
