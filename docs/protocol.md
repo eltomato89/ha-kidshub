@@ -78,6 +78,8 @@ Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit B
 `8927`, Pfad `/sendspin`), nicht aus der Entry-URL (die kann ein Container-Name sein). Fallbacks: MA-`/info` über HTTP, bei MA als Add-on die IP des HA-Hosts. Ein in den KidsHub-Einstellungen gesetztes `sendspin_url` hat immer Vorrang. Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
 Sendspin-Client-ID (MA vergibt eine eigene `player_id`, siehe §3.3).
 
+`tiles.radio` (ab 0.1.5) ist nur `true`, wenn die Kachel eingeschaltet **und** mindestens ein Sender freigegeben ist; fehlt das Feld (ältere Integration), zeigt die App keine Radio-Kachel. Die App blendet die Radio-Kachel außerdem bei `music_enabled:false` aus.
+
 `kind` ∈ `switch` | `dimmer` | `cover` | `color`.
 Die Zuordnung macht die Integration: `light` mit Farbmodus `hs`/`rgb*`/`xy` → `color`,
 sonstiges dimmbares `light` → `dimmer`, `cover` → `cover`, alles andere → `switch`.

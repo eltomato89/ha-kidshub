@@ -49,13 +49,16 @@ def build_config(
                 "colors": copy.deepcopy(colors) if kind == "color" else [],
             }
         )
+    tiles = copy.deepcopy(settings["tiles"])
+    # no station allowed: no radio tile (the other tiles show an empty state)
+    tiles["radio"] = bool(tiles.get("radio")) and bool(options.get("radios"))
     alarm = dict(copy.deepcopy(settings["alarm"]))
     alarm["button_required"] = bool(options.get("stop_button_entity"))
     return {
         "type": "config",
         "version": version,
         "child_name": child_name,
-        "tiles": copy.deepcopy(settings["tiles"]),
+        "tiles": tiles,
         "settings_visible": settings["settings_visible"],
         "music_enabled": settings["music_enabled"],
         "max_volume": settings["max_volume"],

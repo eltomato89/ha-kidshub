@@ -79,6 +79,19 @@ def test_build_config_room_and_keys():
     assert b["icon"] is None and b["colors"] == []
 
 
+def test_build_config_radio_tile_needs_a_station():
+    assert _config({})["tiles"]["radio"] is False
+    assert _config({"radios": []})["tiles"]["radio"] is False
+    assert _config({"radios": ["library://radio/1"]})["tiles"]["radio"] is True
+    off = {**DEFAULT_SETTINGS, "tiles": {**DEFAULT_SETTINGS["tiles"], "radio": False}}
+    cfg = build_config(
+        version=1, child_name="Paul", settings=off,
+        options={"radios": ["library://radio/1"]}, hass_states=lambda _: None, sendspin=None,
+    )
+    assert cfg["tiles"]["radio"] is False
+    assert DEFAULT_SETTINGS["tiles"]["radio"] is True  # not mutated
+
+
 def test_sort_episodes():
     items = [
         {"uri": "old", "stars": 5, "_published": 1.0},
