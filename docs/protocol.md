@@ -75,7 +75,7 @@ Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit B
           "kind":"color","colors":[[255,92,92],[255,210,63],[76,217,123],[155,107,255],[58,160,255],[255,243,214]]}]}
 ```
 `sendspin.url` leitet die Integration aus der von MA selbst gemeldeten Basis-Adresse ab (`/info` → `base_url`; Host, Port
-`8927`, Pfad `/sendspin`), nicht aus der Entry-URL (die kann ein Container-Name sein). Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
+`8927`, Pfad `/sendspin`), nicht aus der Entry-URL (die kann ein Container-Name sein). Fallbacks: MA-`/info` über HTTP, bei MA als Add-on die IP des HA-Hosts. Ein in den KidsHub-Einstellungen gesetztes `sendspin_url` hat immer Vorrang. Fehlt MA, ist `sendspin` `null`. Die App nutzt `client_id` als
 Sendspin-Client-ID (MA vergibt eine eigene `player_id`, siehe §3.3).
 
 `kind` ∈ `switch` | `dimmer` | `cover` | `color`.
