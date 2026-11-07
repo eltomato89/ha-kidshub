@@ -48,7 +48,7 @@ Fehlercodes: `not_allowed`, `not_found`, `ma_unavailable`, `invalid`, `tts_faile
 ### 3.1 Handshake
 App → `{"type":"auth","device_id":"…","token":"…","app_version":"1.0.0"}`
 Server → `{"type":"auth_ok"}` und direkt danach `config`. Danach je ein `entity_state` für
-jede Zimmer-Entität und `now_playing`, falls etwas läuft.
+jede Zimmer-Entität und immer ein `now_playing` (leer mit `kind:null`, wenn nichts läuft).
 Bei ungültigem Token oder unbekanntem Gerät: `{"type":"auth_invalid"}`, danach schließt der Server — die App gibt dann endgültig auf (neu koppeln). Ist das Gerät bekannt, aber gerade nicht geladen (Neuladen, HA-Start), schließt der Server **ohne** `auth_invalid`; die App verbindet sich mit Backoff neu.
 Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit Backoff neu:
 1, 2, 5, 10, 30 s, danach alle 30 s.
