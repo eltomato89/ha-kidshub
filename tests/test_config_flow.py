@@ -142,3 +142,20 @@ async def test_device_empty_name_is_form_error(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     hass.config_entries.flow.async_abort(result["flow_id"])
+
+
+async def test_settings_options_prewarm_toggle(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"entry_type": "settings"},
+        options={"tts_engine": "tts.x", "tts_language": "de-DE"},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert "tts_prewarm" in result["data_schema"].schema
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"tts_prewarm": False}
+    )
+    assert result["type"] == "create_entry"
+    assert entry.options["tts_prewarm"] is False
+    assert entry.options["tts_engine"] == "tts.x"

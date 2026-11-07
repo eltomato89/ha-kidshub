@@ -205,7 +205,8 @@
         "title": "Einstellungen",
         "description": "Optional: die Sendspin-Adresse, über die die App Audio empfängt, z. B. ws://192.168.1.10:8927/sendspin. Leer lassen, um die von Music Assistant gemeldete Adresse zu nutzen.",
         "data": {
-          "sendspin_url": "Sendspin-URL"
+          "sendspin_url": "Sendspin-URL",
+          "tts_prewarm": "Ansagen im Voraus erzeugen"
         }
       }
     },

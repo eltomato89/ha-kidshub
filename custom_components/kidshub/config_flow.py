@@ -25,6 +25,7 @@ from .const import (
     CONF_TTS_ENGINE,
     CONF_TTS_LANGUAGE,
     CONF_TTS_OPTIONS,
+    CONF_TTS_PREWARM,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_DEVICE,
@@ -217,6 +218,7 @@ class SettingsOptionsFlow(OptionsFlow):
                     options[CONF_SENDSPIN_URL] = url
                 else:
                     options.pop(CONF_SENDSPIN_URL, None)
+                options[CONF_TTS_PREWARM] = bool(user_input.get(CONF_TTS_PREWARM, True))
                 return self.async_create_entry(data=options)
         return self.async_show_form(
             step_id="settings",
@@ -224,7 +226,11 @@ class SettingsOptionsFlow(OptionsFlow):
                 {
                     _suggested(
                         CONF_SENDSPIN_URL, options.get(CONF_SENDSPIN_URL)
-                    ): selector.TextSelector()
+                    ): selector.TextSelector(),
+                    vol.Required(
+                        CONF_TTS_PREWARM,
+                        default=options.get(CONF_TTS_PREWARM, True),
+                    ): selector.BooleanSelector(),
                 }
             ),
             errors=errors,

@@ -43,6 +43,9 @@ async def async_get_config_entry_diagnostics(
             "source": (ma_diag or {}).get("source"),
             "ma": ma_diag,
         }
+        prewarm = getattr(data, "prewarm", None)
+        if prewarm is not None:
+            result["tts_prewarm"] = prewarm.status()
         return result
     device = getattr(data, "devices", {}).get(device_id)
     result["versions"]["app"] = getattr(device, "app_version", None)

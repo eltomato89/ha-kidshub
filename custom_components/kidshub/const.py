@@ -15,6 +15,7 @@ CONF_SENDSPIN_URL = "sendspin_url"
 CONF_TTS_ENGINE = "tts_engine"
 CONF_TTS_LANGUAGE = "tts_language"
 CONF_TTS_OPTIONS = "tts_options"
+CONF_TTS_PREWARM = "tts_prewarm"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,

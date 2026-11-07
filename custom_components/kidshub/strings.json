@@ -205,7 +205,8 @@
         "title": "Settings",
         "description": "Optional: the Sendspin address the app uses for audio, e.g. ws://192.168.1.10:8927/sendspin. Leave empty to use the address Music Assistant reports.",
         "data": {
-          "sendspin_url": "Sendspin URL"
+          "sendspin_url": "Sendspin URL",
+          "tts_prewarm": "Pre-generate announcements"
         }
       }
     },

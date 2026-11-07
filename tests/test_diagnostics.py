@@ -62,7 +62,7 @@ async def test_device_diagnostics(hass: HomeAssistant, hass_client) -> None:
     assert TOKEN_HASH not in json.dumps(diag)
     assert diag["entry"]["data"]["token_hash"] == "**REDACTED**"
     assert diag["entry"]["data"]["device_id"] == "dev-a"
-    assert diag["versions"]["integration"] == "0.1.3"
+    assert diag["versions"]["integration"] == "0.1.4"
     assert diag["versions"]["ma_server"] == "2.10.9"
     assert diag["versions"]["home_assistant"]
     assert diag["device"]["connected"] is False
@@ -103,5 +103,28 @@ async def test_settings_diagnostics(hass: HomeAssistant, hass_client) -> None:
     assert diag["entry"]["options"]["tts_engine"] == "tts.x"
     assert diag["sendspin"]["url"] == "ws://10.1.2.3:8927/sendspin"
     assert diag["sendspin"]["source"] == "override"
-    assert diag["versions"]["integration"] == "0.1.3"
+    assert diag["versions"]["integration"] == "0.1.4"
     assert "device" not in diag
+
+
+async def test_settings_diagnostics_prewarm(hass: HomeAssistant, hass_client) -> None:
+    _ma(hass)
+    assert await async_setup_component(hass, "diagnostics", {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="KidsHub",
+        data={"entry_type": "settings"},
+        options={"tts_engine": "tts.x", "tts_prewarm": False},
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    diag = await get_diagnostics_for_config_entry(hass, hass_client, entry)
+
+    assert diag["tts_prewarm"] == {
+        "enabled": False,
+        "paused_until": None,
+        "reason": None,
+        "queue": 0,
+    }

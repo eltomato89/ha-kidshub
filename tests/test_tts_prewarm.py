@@ -402,3 +402,169 @@ async def test_failed_generation_is_retried(hass: HomeAssistant) -> None:
         res = await device.handle_request({"type": "tts", "id": 2, "text": "Hallo"})
     assert res["url"].startswith("/api/kidshub/tts/")
     assert eng.texts == ["Hallo", "Hallo"]
+
+
+# --- 0.1.4: prewarm option and quota detection ---------------------------------
+
+
+QUOTA_DELAY = (
+    "429 RESOURCE_EXHAUSTED. Quota exceeded for metric per day "
+    "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '81307s'}"
+)
+QUOTA_NO_DELAY = "429 RESOURCE_EXHAUSTED. You exceeded your current quota"
+
+
+def _settings_entry(hass: HomeAssistant):
+    return hass.config_entries.async_entries(DOMAIN)[0]
+
+
+def _quota_warnings(caplog):
+    return [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+async def test_option_off_no_engine_calls(hass: HomeAssistant) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+    with p1, p2:
+        _, device = await _setup(hass)
+        hass.config_entries.async_update_entry(
+            _settings_entry(hass),
+            options={
+                "tts_engine": "tts.fake",
+                "tts_language": "de-DE",
+                "tts_prewarm": False,
+            },
+        )
+        await hass.async_block_till_done()
+        await _browse(device, section="music")
+        await _browse(device, section="music", parent_uri=PL1.uri)
+        await _idle(hass)
+        assert eng.texts == []
+        # interactive tts is unaffected
+        res = await device.handle_request({"type": "tts", "id": 2, "text": "Hallo"})
+        assert res["url"].startswith("/api/kidshub/tts/")
+        assert eng.texts == ["Hallo"]
+        # switching back on takes effect without reload
+        hass.config_entries.async_update_entry(
+            _settings_entry(hass),
+            options={"tts_engine": "tts.fake", "tts_language": "de-DE"},
+        )
+        await _browse(device, section="music")
+        await _idle(hass)
+    assert "Lieder" in eng.texts
+
+
+async def test_quota_with_retry_delay_pauses(hass: HomeAssistant, caplog) -> None:
+    eng = Engine()
+    eng.fail = True
+    p1, p2 = eng.patches()
+
+    async def boom(hass_, media_source_id):
+        eng.texts.append(media_source_id)
+        raise RuntimeError(QUOTA_DELAY)
+
+    with p1, p2, patch(
+        "homeassistant.components.tts.async_get_media_source_audio", boom
+    ):
+        _, device = await _setup(hass)
+        prewarm = hass.data[DOMAIN].prewarm
+        clock = prewarm._clock = Clock()
+        caplog.clear()
+        await _browse(device, section="music", parent_uri=PL1.uri)
+        await _idle(hass)
+        assert len(eng.texts) <= 2  # no 3-failure ramp: first quota error pauses
+        assert not prewarm.busy
+        assert prewarm._paused_until == clock.now + 81307
+        warnings = _quota_warnings(caplog)
+        assert len(warnings) == 1
+        assert "Kontingent" in warnings[0].getMessage()
+        before = len(eng.texts)
+        clock.now += 81000
+        await _browse(device, section="music")
+        await _idle(hass)
+        assert len(eng.texts) == before  # still paused
+        clock.now += 400
+        await _browse(device, section="music")
+        await _idle(hass)
+        assert len(eng.texts) > before  # resumed (engine fails again, fine)
+
+
+async def test_quota_without_delay_pauses_until_midnight(
+    hass: HomeAssistant, caplog
+) -> None:
+    from datetime import datetime, timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    eng = Engine()
+    p1, p2 = eng.patches()
+
+    async def boom(hass_, media_source_id):
+        eng.texts.append(media_source_id)
+        raise RuntimeError(QUOTA_NO_DELAY)
+
+    now = dt_util.now().replace(hour=22, minute=30, second=0, microsecond=0)
+    with p1, p2, patch(
+        "homeassistant.components.tts.async_get_media_source_audio", boom
+    ), patch("custom_components.kidshub.tts_cache.dt_util.now", lambda: now):
+        _, device = await _setup(hass)
+        prewarm = hass.data[DOMAIN].prewarm
+        clock = prewarm._clock = Clock()
+        await _browse(device, section="music", parent_uri=PL1.uri)
+        await _idle(hass)
+        assert prewarm._paused_until == clock.now + 90 * 60  # 22:30 -> 00:00
+        diag = prewarm.status()
+        assert diag["paused_until"].endswith("00:00:00" ) or "T00:00" in diag["paused_until"]
+        assert diag["reason"] == "quota"
+
+
+async def test_quota_delay_capped_to_24h(hass: HomeAssistant) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+
+    async def boom(hass_, media_source_id):
+        raise RuntimeError("429 retry in 999999 seconds")
+
+    with p1, p2, patch(
+        "homeassistant.components.tts.async_get_media_source_audio", boom
+    ):
+        _, device = await _setup(hass)
+        prewarm = hass.data[DOMAIN].prewarm
+        clock = prewarm._clock = Clock()
+        await _browse(device, section="music", parent_uri=PL1.uri)
+        await _idle(hass)
+        assert prewarm._paused_until == clock.now + 86400
+
+
+async def test_interactive_tts_works_during_quota_pause(hass: HomeAssistant) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+    calls = []
+
+    async def boom(hass_, media_source_id):
+        calls.append(media_source_id)
+        raise RuntimeError(QUOTA_DELAY)
+
+    with p1, p2:
+        _, device = await _setup(hass)
+        with patch("homeassistant.components.tts.async_get_media_source_audio", boom):
+            await _browse(device, section="music")
+            await _idle(hass)
+        assert hass.data[DOMAIN].prewarm.status()["paused_until"] is not None
+        res = await device.handle_request({"type": "tts", "id": 2, "text": "Jetzt"})
+    assert res["url"].startswith("/api/kidshub/tts/")
+    assert "Jetzt" in eng.texts
+
+
+async def test_prewarm_status_fields(hass: HomeAssistant) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+    with p1, p2:
+        await _setup(hass)
+        status = hass.data[DOMAIN].prewarm.status()
+    assert status == {
+        "enabled": True,
+        "paused_until": None,
+        "reason": None,
+        "queue": 0,
+    }

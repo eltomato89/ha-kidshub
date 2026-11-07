@@ -11,16 +11,19 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Iterable
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from homeassistant.components import tts
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_TTS_ENGINE,
     CONF_TTS_LANGUAGE,
     CONF_TTS_OPTIONS,
+    CONF_TTS_PREWARM,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_SETTINGS,
@@ -35,7 +38,12 @@ PREWARM_QUEUE_SIZE = 500  # pending texts (both priorities)
 PREWARM_PER_CALL = 30  # titles of one browse/favorites answer
 PREWARM_BREAKER_FAILURES = 3
 PREWARM_PAUSE = 300  # seconds
+PREWARM_QUOTA_MAX_PAUSE = 86400  # seconds, cap of a parsed retry delay
 PREWARM_RETRY_AFTER = 600  # seconds before a failed text is tried again
+RETRY_DELAY_RE = re.compile(
+    r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s|retry in (\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 CACHE_DIR = "kidshub_tts"
 EXTENSIONS = ("mp3", "wav", "ogg", "flac")
 NAME_RE = re.compile(r"^[0-9a-f]{64}\.(mp3|wav|ogg|flac)$")
@@ -67,6 +75,14 @@ class TtsCache:
                     dict(entry.options.get(CONF_TTS_OPTIONS) or {}),
                 )
         raise TtsFailed("no TTS engine configured")
+
+    @property
+    def prewarm_enabled(self) -> bool:
+        """Return the ``tts_prewarm`` option of the settings entry (default on)."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_SETTINGS:
+                return bool(entry.options.get(CONF_TTS_PREWARM, True))
+        return True
 
     @staticmethod
     def cache_key(engine: str, language: str, options: dict[str, Any], text: str) -> str:
@@ -204,6 +220,8 @@ class TtsPrewarmer:
         self._workers: set[asyncio.Task[None]] = set()
         self._failures = 0
         self._paused_until = 0.0
+        self._paused_wall: Any = None  # wall-clock time of the pause end
+        self._pause_reason: str | None = None
         self._failed: dict[str, float] = {}  # text -> retry not before
 
     @property
@@ -213,6 +231,16 @@ class TtsPrewarmer:
 
     def _paused(self) -> bool:
         return self._clock() < self._paused_until
+
+    def status(self) -> dict[str, Any]:
+        """Return the prewarm state for diagnostics."""
+        paused = self._paused()
+        return {
+            "enabled": self.cache.prewarm_enabled,
+            "paused_until": self._paused_wall.isoformat() if paused else None,
+            "reason": self._pause_reason if paused else None,
+            "queue": len(self._high) + len(self._low),
+        }
 
     def _skip(self, text: str) -> bool:
         until = self._failed.get(text)
@@ -232,7 +260,11 @@ class TtsPrewarmer:
     ) -> None:
         """Queue ``texts`` (normalised like a ``tts`` request) for generation."""
         try:
-            if self._paused() or not self.cache.configured:
+            if (
+                not self.cache.prewarm_enabled
+                or self._paused()
+                or not self.cache.configured
+            ):
                 return
             count = 0
             for text in texts:
@@ -285,9 +317,48 @@ class TtsPrewarmer:
                 raise
             except Exception as err:  # noqa: BLE001 - pre-warming is best effort
                 _LOGGER.debug("TTS prewarm of %r failed: %s", text, err)
-                self._on_failure(text)
+                if not self._on_quota(err):
+                    self._on_failure(text)
             else:
                 self._failures = 0
+
+    @staticmethod
+    def _error_text(err: BaseException) -> str:
+        parts: list[str] = []
+        seen: set[int] = set()
+        while err is not None and id(err) not in seen:
+            seen.add(id(err))
+            parts.append(str(err))
+            err = err.__cause__ or err.__context__  # type: ignore[assignment]
+        return " | ".join(parts)
+
+    def _on_quota(self, err: BaseException) -> bool:
+        """Pause for the quota reset if ``err`` is a quota error; return whether."""
+        message = self._error_text(err)
+        if "429" not in message and "RESOURCE_EXHAUSTED" not in message:
+            return False
+        if self._paused():
+            return True  # a parallel worker already paused and logged
+        seconds: float | None = None
+        if match := RETRY_DELAY_RE.search(message):
+            seconds = min(float(match[1] or match[2]), PREWARM_QUOTA_MAX_PAUSE)
+        if seconds is None or seconds <= 0:
+            now = dt_util.now()
+            midnight = (now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            seconds = (midnight - now).total_seconds()
+        self._paused_until = self._clock() + seconds
+        self._paused_wall = dt_util.now() + timedelta(seconds=seconds)
+        self._pause_reason = "quota"
+        self._failures = 0
+        self._high.clear()
+        self._low.clear()
+        _LOGGER.warning(
+            "Gemini-/TTS-Kontingent erschöpft – Vorerzeugen pausiert bis %s",
+            dt_util.as_local(self._paused_wall).strftime("%H:%M"),
+        )
+        return True
 
     def _on_failure(self, text: str) -> None:
         now = self._clock()
@@ -295,6 +366,8 @@ class TtsPrewarmer:
         self._failures += 1
         if self._failures >= PREWARM_BREAKER_FAILURES and not self._paused():
             self._paused_until = now + PREWARM_PAUSE
+            self._paused_wall = dt_util.now() + timedelta(seconds=PREWARM_PAUSE)
+            self._pause_reason = "failures"
             self._failures = 0
             self._low.clear()
             _LOGGER.warning(
