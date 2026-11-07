@@ -178,8 +178,8 @@ wenn `p > 0.02`, sonst aus.
 
 ## 5. Lautstärke
 
-- Logische Lautstärke `L ∈ 0..100`. Effektive Systemlautstärke =
-  `round(L/100 * cap/100 * streamMax)`, mit `cap = max_volume` (bzw. `alarm_max_volume`
+- Logische Lautstärke `L ∈ 0..100`. Effektive Systemlautstärke = 0, wenn `L == 0` oder `cap == 0`, sonst
+  `clamp(round(L/100 * cap/100 * streamMax), 1, maxIndex)` mit `maxIndex = max(1, round(cap/100*streamMax))` (nie stumm bei L > 0), mit `cap = max_volume` (bzw. `alarm_max_volume`
   während der Wecker klingelt).
 - Die App hält die Systemlautstärke von `STREAM_MUSIC` **immer** ≤ `cap`. Jede Änderung von
   außen (Hardware-Tasten, andere Apps) wird sofort begrenzt.
