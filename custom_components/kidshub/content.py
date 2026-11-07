@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, quote, urlparse
 
 from .device import Handler, InvalidRequest, KidDevice, NotAllowed
 from .sorting import sort_episodes, sort_tracks
+from .tts_cache import PREWARM_PER_CALL
 
 if TYPE_CHECKING:
     from .ma import MaAdapter, MaItem
@@ -89,8 +91,18 @@ class ContentService:
         # it can be rated even when it is not part of an allowed container.
         self.now_playing: MaItem | None = None
         self._children: dict[str, tuple[float, list[MaItem]]] = {}
-        device.register_handler("browse", self._prewarming(self._handle_browse))
-        device.register_handler("favorites", self._prewarming(self._handle_favorites))
+        device.register_handler(
+            "browse",
+            self._prewarming(
+                self._handle_browse,
+                # top-level lists first; long child lists must not delay them
+                lambda msg: not isinstance(msg.get("parent_uri"), str)
+                or msg["parent_uri"].startswith(FAVORITES_PREFIX),
+            ),
+        )
+        device.register_handler(
+            "favorites", self._prewarming(self._handle_favorites, lambda msg: True)
+        )
         device.register_handler("rate", self._handle_rate)
 
     # -- allowlist --------------------------------------------------------
@@ -225,12 +237,18 @@ class ContentService:
 
     # -- handlers ---------------------------------------------------------
 
-    def _prewarming(self, handler: Handler) -> Handler:
-        """Wrap ``handler`` to pre-warm the speech of every item title it returns."""
+    def _prewarming(
+        self, handler: Handler, priority: Callable[[dict[str, Any]], bool]
+    ) -> Handler:
+        """Wrap ``handler`` to pre-warm the speech of the item titles it returns."""
 
         async def wrapped(msg: dict[str, Any]) -> dict[str, Any]:
             result = await handler(msg)
-            self.device.prewarm_tts(i.get("title") for i in result.get("items") or [])
+            self.device.prewarm_tts(
+                (i.get("title") for i in result.get("items") or []),
+                priority=priority(msg),
+                limit=PREWARM_PER_CALL,
+            )
             return result
 
         return wrapped

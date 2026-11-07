@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Iterable
 from pathlib import Path
@@ -30,7 +31,11 @@ _LOGGER = logging.getLogger(__name__)
 
 TTS_TIMEOUT = 15.0
 PREWARM_CONCURRENCY = 2
-PREWARM_QUEUE_SIZE = 500
+PREWARM_QUEUE_SIZE = 500  # pending texts (both priorities)
+PREWARM_PER_CALL = 30  # titles of one browse/favorites answer
+PREWARM_BREAKER_FAILURES = 3
+PREWARM_PAUSE = 300  # seconds
+PREWARM_RETRY_AFTER = 600  # seconds before a failed text is tried again
 CACHE_DIR = "kidshub_tts"
 EXTENSIONS = ("mp3", "wav", "ogg", "flac")
 NAME_RE = re.compile(r"^[0-9a-f]{64}\.(mp3|wav|ogg|flac)$")
@@ -85,7 +90,13 @@ class TtsCache:
         return name
 
     async def _generate(
-        self, key: str, text: str, engine: str, language: str, options: dict[str, Any]
+        self,
+        key: str,
+        text: str,
+        engine: str,
+        language: str,
+        options: dict[str, Any],
+        quiet: bool = False,
     ) -> str:
         try:
             async with asyncio.timeout(TTS_TIMEOUT):
@@ -98,18 +109,18 @@ class TtsCache:
         except TimeoutError as err:
             raise TtsFailed("TTS engine timed out") from err
         except Exception as err:
-            _LOGGER.warning("TTS generation failed: %s", err)
+            # prewarm failures are counted by the prewarm circuit breaker instead
+            (_LOGGER.debug if quiet else _LOGGER.warning)(
+                "TTS generation failed: %s", err
+            )
             raise TtsFailed("TTS generation failed") from err
         if ext not in EXTENSIONS or not data:
             raise TtsFailed("TTS engine returned unusable audio")
         return await self.hass.async_add_executor_job(self._store, key, ext, data)
 
     async def _ensure(self, key: str, *args: Any) -> str:
-        try:
-            found = await self.hass.async_add_executor_job(self._find, key)
-            return found or await self._generate(key, *args)
-        finally:
-            self._inflight.pop(key, None)
+        found = await self.hass.async_add_executor_job(self._find, key)
+        return found or await self._generate(key, *args)
 
     @property
     def configured(self) -> bool:
@@ -120,7 +131,9 @@ class TtsCache:
             return False
         return True
 
-    def _task(self, text: str, *, join: bool = True) -> asyncio.Task[str] | None:
+    def _task(
+        self, text: str, *, join: bool = True, quiet: bool = False
+    ) -> asyncio.Task[str] | None:
         """Return the generation task of ``text``, shared by all callers.
 
         With ``join=False`` an already running generation returns None instead.
@@ -131,12 +144,19 @@ class TtsCache:
         if task is not None:
             return task if join else None
         task = self.hass.async_create_task(
-            self._ensure(key, text, engine, language, options)
+            self._ensure(key, text, engine, language, options, quiet)
         )
-        self._inflight[key] = task
-        # a cancelled prewarm worker leaves the shielded task unawaited
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        if not task.done():  # an eagerly started task may already be finished
+            self._inflight[key] = task
+        task.add_done_callback(lambda t: self._done(key, t))
         return task
+
+    def _done(self, key: str, task: asyncio.Task[str]) -> None:
+        if self._inflight.get(key) is task:
+            del self._inflight[key]
+        # a cancelled prewarm worker leaves the shielded task unawaited
+        if not task.cancelled():
+            task.exception()
 
     async def get_url(self, text: str) -> str:
         """Return the proxy URL of the audio for ``text`` (generating it once)."""
@@ -147,7 +167,7 @@ class TtsCache:
 
     async def prewarm(self, text: str) -> None:
         """Generate the audio of ``text`` unless cached or already in flight."""
-        task = self._task(text, join=False)
+        task = self._task(text, join=False, quiet=True)
         if task is not None:
             await asyncio.shield(task)
 
@@ -167,34 +187,66 @@ class TtsCache:
 class TtsPrewarmer:
     """Background queue that fills the TTS cache ahead of the first tap.
 
-    Bounded (oldest pending texts are dropped), deduplicated, at most
-    ``PREWARM_CONCURRENCY`` generations at a time; it never raises.
+    Two priorities: high (root lists, favorites, room names) is served first and
+    is never evicted by low (list children). The queue is bounded: a full queue
+    drops the newest low-priority texts. At most ``PREWARM_CONCURRENCY``
+    generations run at a time. After ``PREWARM_BREAKER_FAILURES`` consecutive
+    failures prewarming pauses; failing texts are not retried for a while. It
+    never raises.
     """
 
     def __init__(self, hass: HomeAssistant, cache: TtsCache) -> None:
         self.hass = hass
         self.cache = cache
-        self._pending: OrderedDict[str, None] = OrderedDict()
+        self._clock = time.monotonic
+        self._high: OrderedDict[str, None] = OrderedDict()
+        self._low: OrderedDict[str, None] = OrderedDict()
         self._workers: set[asyncio.Task[None]] = set()
+        self._failures = 0
+        self._paused_until = 0.0
+        self._failed: dict[str, float] = {}  # text -> retry not before
 
     @property
     def busy(self) -> bool:
         """Return whether texts are pending or being generated."""
-        return bool(self._pending or self._workers)
+        return bool(self._high or self._low or self._workers)
 
-    def schedule(self, texts: Iterable[object]) -> None:
+    def _paused(self) -> bool:
+        return self._clock() < self._paused_until
+
+    def _skip(self, text: str) -> bool:
+        until = self._failed.get(text)
+        if until is None:
+            return False
+        if self._clock() < until:
+            return True
+        del self._failed[text]
+        return False
+
+    def schedule(
+        self,
+        texts: Iterable[object],
+        *,
+        priority: bool = False,
+        limit: int | None = None,
+    ) -> None:
         """Queue ``texts`` (normalised like a ``tts`` request) for generation."""
         try:
-            if not self.cache.configured:
+            if self._paused() or not self.cache.configured:
                 return
+            count = 0
             for text in texts:
+                if limit is not None and count >= limit:
+                    break
                 say = tts_text(text)
-                if say is None or say in self._pending:
+                if say is None:
                     continue
-                self._pending[say] = None
-                while len(self._pending) > PREWARM_QUEUE_SIZE:
-                    self._pending.popitem(last=False)
-            while self._pending and len(self._workers) < PREWARM_CONCURRENCY:
+                count += 1
+                self._add(say, priority)
+            while (
+                (self._high or self._low)
+                and len(self._workers) < PREWARM_CONCURRENCY
+            ):
                 task = self.hass.async_create_background_task(
                     self._work(), "kidshub tts prewarm"
                 )
@@ -203,19 +255,58 @@ class TtsPrewarmer:
         except Exception as err:  # noqa: BLE001 - pre-warming is best effort
             _LOGGER.debug("TTS prewarm scheduling failed: %s", err)
 
+    def _add(self, text: str, priority: bool) -> None:
+        if text in self._high or self._skip(text):
+            return
+        if not priority:
+            if text not in self._low and (
+                len(self._high) + len(self._low) < PREWARM_QUEUE_SIZE
+            ):
+                self._low[text] = None
+            return
+        self._low.pop(text, None)
+        if len(self._high) + len(self._low) >= PREWARM_QUEUE_SIZE:
+            if not self._low:
+                return  # full of high-priority texts
+            self._low.popitem(last=True)  # evict the newest low-priority text
+        self._high[text] = None
+
+    def _next(self) -> str | None:
+        for queue in (self._high, self._low):
+            if queue:
+                return queue.popitem(last=False)[0]
+        return None
+
     async def _work(self) -> None:
-        while self._pending:
-            text, _ = self._pending.popitem(last=False)
+        while not self._paused() and (text := self._next()) is not None:
             try:
                 await self.cache.prewarm(text)
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001 - pre-warming is best effort
                 _LOGGER.debug("TTS prewarm of %r failed: %s", text, err)
+                self._on_failure(text)
+            else:
+                self._failures = 0
+
+    def _on_failure(self, text: str) -> None:
+        now = self._clock()
+        self._failed[text] = now + PREWARM_RETRY_AFTER
+        self._failures += 1
+        if self._failures >= PREWARM_BREAKER_FAILURES and not self._paused():
+            self._paused_until = now + PREWARM_PAUSE
+            self._failures = 0
+            self._low.clear()
+            _LOGGER.warning(
+                "TTS prewarming paused for %d min after %d failures in a row",
+                PREWARM_PAUSE // 60,
+                PREWARM_BREAKER_FAILURES,
+            )
 
     def cancel(self) -> None:
         """Drop pending texts and stop the workers (entry unload)."""
-        self._pending.clear()
+        self._high.clear()
+        self._low.clear()
         for task in list(self._workers):
             task.cancel()
         self._workers.clear()

@@ -210,11 +210,17 @@ class KidDevice:
         await self.store.async_update_settings(copy.deepcopy(patch))
         self._notify()
 
-    def prewarm_tts(self, texts: Iterable[object]) -> None:
+    def prewarm_tts(
+        self,
+        texts: Iterable[object],
+        *,
+        priority: bool = True,
+        limit: int | None = None,
+    ) -> None:
         """Generate speech for ``texts`` in the background (never blocks or raises)."""
         prewarm = getattr(self.hass.data.get(DOMAIN), "prewarm", None)
         if prewarm is not None:
-            prewarm.schedule(texts)
+            prewarm.schedule(texts, priority=priority, limit=limit)
 
     def register_handler(self, type_: str, handler: Handler) -> None:
         """Register the handler of an app request type."""
