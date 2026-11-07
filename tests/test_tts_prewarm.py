@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import tempfile
+
+import pytest
 from unittest.mock import patch
 
 from homeassistant.core import HomeAssistant
@@ -10,6 +12,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.kidshub.const import DOMAIN
+from custom_components.kidshub.device import TtsFailed
 
 from .fake_ma import FakeMa, item
 
@@ -523,7 +526,7 @@ async def test_quota_delay_capped_to_24h(hass: HomeAssistant) -> None:
     p1, p2 = eng.patches()
 
     async def boom(hass_, media_source_id):
-        raise RuntimeError("429 retry in 999999 seconds")
+        raise RuntimeError("429 quota exceeded, retry in 999999 seconds")
 
     with p1, p2, patch(
         "homeassistant.components.tts.async_get_media_source_audio", boom
@@ -568,3 +571,63 @@ async def test_prewarm_status_fields(hass: HomeAssistant) -> None:
         "reason": None,
         "queue": 0,
     }
+
+
+# --- follow-ups: interactive quota error, real error text, tight matching ------
+
+LIVE_ERROR = (
+    "429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your "
+    "current quota, please check your plan and billing details. ... Quota exceeded "
+    "for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+    "limit: 10, model: gemini-3.8-flash-tts, description: Generate content requests "
+    "per day limit exceeded on Free Tier. ...', 'status': 'RESOURCE_EXHAUSTED', "
+    "'details': [{'@type': 'type.googleapis.com/google.rpc.Help'}, "
+    "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '81307s'}]}}"
+)
+
+
+async def test_interactive_quota_error_pauses_prewarm(hass: HomeAssistant) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+
+    async def boom(hass_, media_source_id):
+        raise RuntimeError(LIVE_ERROR)
+
+    with p1, p2:
+        _, device = await _setup(hass)
+        prewarm = hass.data[DOMAIN].prewarm
+        clock = prewarm._clock = Clock()
+        with patch("homeassistant.components.tts.async_get_media_source_audio", boom):
+            with pytest.raises(TtsFailed):
+                await device.handle_request({"type": "tts", "id": 2, "text": "Hi"})
+        assert prewarm._paused_until == clock.now + 81307
+        await _browse(device, section="music")
+        await _idle(hass)
+    assert eng.texts == []  # prewarm paused
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "engine down at http://host:14290/tts",
+        "error code 14290",
+        "HTTP 429 from proxy",  # no quota/rate context
+        "timeout after 4290 ms",
+    ],
+)
+async def test_bare_429_does_not_pause(hass: HomeAssistant, message) -> None:
+    eng = Engine()
+    p1, p2 = eng.patches()
+
+    async def boom(hass_, media_source_id):
+        raise RuntimeError(message)
+
+    with p1, p2, patch(
+        "homeassistant.components.tts.async_get_media_source_audio", boom
+    ):
+        _, device = await _setup(hass)
+        prewarm = hass.data[DOMAIN].prewarm
+        prewarm._clock = Clock()
+        await _browse(device, section="music")
+        await _idle(hass)
+        assert prewarm.status()["reason"] != "quota"

@@ -10,7 +10,7 @@ import os
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,10 @@ PREWARM_BREAKER_FAILURES = 3
 PREWARM_PAUSE = 300  # seconds
 PREWARM_QUOTA_MAX_PAUSE = 86400  # seconds, cap of a parsed retry delay
 PREWARM_RETRY_AFTER = 600  # seconds before a failed text is tried again
+QUOTA_RE = re.compile(
+    r"RESOURCE_EXHAUSTED|\b429\b.*(?:quota|rate)|(?:quota|rate).*\b429\b",
+    re.IGNORECASE | re.DOTALL,
+)
 RETRY_DELAY_RE = re.compile(
     r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s|retry in (\d+(?:\.\d+)?)",
     re.IGNORECASE,
@@ -62,6 +66,8 @@ class TtsCache:
         self.hass = hass
         self.directory = Path(hass.config.path(CACHE_DIR))
         self._inflight: dict[str, asyncio.Task[str]] = {}
+        # called with every engine error (the prewarmer pauses on quota errors)
+        self.on_error: Callable[[BaseException], object] | None = None
 
     def _settings(self) -> tuple[str, str, dict[str, Any]]:
         for entry in self.hass.config_entries.async_entries(DOMAIN):
@@ -125,6 +131,8 @@ class TtsCache:
         except TimeoutError as err:
             raise TtsFailed("TTS engine timed out") from err
         except Exception as err:
+            if self.on_error is not None:
+                self.on_error(err)
             # prewarm failures are counted by the prewarm circuit breaker instead
             (_LOGGER.debug if quiet else _LOGGER.warning)(
                 "TTS generation failed: %s", err
@@ -214,6 +222,7 @@ class TtsPrewarmer:
     def __init__(self, hass: HomeAssistant, cache: TtsCache) -> None:
         self.hass = hass
         self.cache = cache
+        cache.on_error = self._on_quota
         self._clock = time.monotonic
         self._high: OrderedDict[str, None] = OrderedDict()
         self._low: OrderedDict[str, None] = OrderedDict()
@@ -335,7 +344,7 @@ class TtsPrewarmer:
     def _on_quota(self, err: BaseException) -> bool:
         """Pause for the quota reset if ``err`` is a quota error; return whether."""
         message = self._error_text(err)
-        if "429" not in message and "RESOURCE_EXHAUSTED" not in message:
+        if not QUOTA_RE.search(message):
             return False
         if self._paused():
             return True  # a parallel worker already paused and logged
