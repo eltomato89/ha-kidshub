@@ -613,6 +613,8 @@ async def test_interactive_quota_error_pauses_prewarm(hass: HomeAssistant) -> No
         "error code 14290",
         "HTTP 429 from proxy",  # no quota/rate context
         "timeout after 4290 ms",
+        "HTTP 429 from engine: failed to generate audio",
+        "429 accurate",
     ],
 )
 async def test_bare_429_does_not_pause(hass: HomeAssistant, message) -> None:

@@ -40,8 +40,9 @@ PREWARM_BREAKER_FAILURES = 3
 PREWARM_PAUSE = 300  # seconds
 PREWARM_QUOTA_MAX_PAUSE = 86400  # seconds, cap of a parsed retry delay
 PREWARM_RETRY_AFTER = 600  # seconds before a failed text is tried again
+_QUOTA_WORD = r"\b(?:quota|rate[ -]?limit\w*|rate)\b"
 QUOTA_RE = re.compile(
-    r"RESOURCE_EXHAUSTED|\b429\b.*(?:quota|rate)|(?:quota|rate).*\b429\b",
+    rf"RESOURCE_EXHAUSTED|\b429\b.*{_QUOTA_WORD}|{_QUOTA_WORD}.*\b429\b",
     re.IGNORECASE | re.DOTALL,
 )
 RETRY_DELAY_RE = re.compile(
