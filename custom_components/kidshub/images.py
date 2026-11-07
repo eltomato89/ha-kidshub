@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
+import socket
 from collections import OrderedDict
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -15,7 +17,9 @@ from PIL import Image
 MIN_SIZE = 64
 MAX_SIZE = 512
 MAX_BYTES = 10 * 1024 * 1024
-FETCH_TIMEOUT = 10.0
+FETCH_TIMEOUT = 10.0  # whole redirect chain
+MAX_REDIRECTS = 3
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 CACHE_SIZE = 200
 MAX_PIXELS = 25_000_000
 MAX_DECODES = 2
@@ -63,25 +67,80 @@ def is_http_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-async def _download(hass: HomeAssistant, url: str) -> bytes:
-    session = async_get_clientsession(hass)
+def _origin(url: str) -> tuple[str, int]:
+    """Return ``(host, port)`` of an http(s) URL, with the scheme's default port."""
+    parsed = urlparse(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return (parsed.hostname or "").lower(), port
+
+
+def _is_public(address: str) -> bool:
+    """Return whether ``address`` is a globally routable unicast IP."""
+    ip = ipaddress.ip_address(address.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+async def _resolve(hass: HomeAssistant, host: str, port: int) -> list[str]:
+    """Return all addresses ``host`` resolves to (non-blocking)."""
+    infos = await hass.loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [str(info[4][0]) for info in infos]
+
+
+async def _check_hop(hass: HomeAssistant, url: str, original: tuple[str, int]) -> None:
+    """Reject a redirect target that is not http(s) or points into a private net.
+
+    The host:port of the registered URL is exempt (MA's image proxy on the LAN).
+    """
+    if not is_http_url(url):
+        raise ImageError("redirect to a non-http(s) URL")
+    host, port = _origin(url)
+    if (host, port) == original:
+        return
     try:
-        async with session.get(
-            url,
-            allow_redirects=False,
-            timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT),
-        ) as resp:
-            if resp.status != 200:
-                raise ImageError(f"upstream status {resp.status}")
-            if (resp.content_length or 0) > MAX_BYTES:
-                raise ImageError("image too large")
-            body = bytearray()
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                body += chunk
-                if len(body) > MAX_BYTES:
-                    raise ImageError("image too large")
-            return bytes(body)
-    except (aiohttp.ClientError, TimeoutError) as err:
+        addresses = await _resolve(hass, host, port)
+    except OSError as err:
+        raise ImageError(f"cannot resolve redirect host: {err}") from err
+    if not addresses or not all(_is_public(a) for a in addresses):
+        raise ImageError("redirect to a private address")
+
+
+async def _download(hass: HomeAssistant, url: str) -> bytes:
+    """Fetch ``url``, following at most ``MAX_REDIRECTS`` checked redirects."""
+    session = async_get_clientsession(hass)
+    original = _origin(url)
+    try:
+        async with asyncio.timeout(FETCH_TIMEOUT):
+            for hop in range(MAX_REDIRECTS + 1):
+                if hop:
+                    await _check_hop(hass, url, original)
+                async with session.get(url, allow_redirects=False) as resp:
+                    if resp.status in REDIRECT_STATUSES:
+                        location = resp.headers.get("Location")
+                        if not location:
+                            raise ImageError("redirect without Location")
+                        url = urljoin(url, location)
+                        continue
+                    if resp.status != 200:
+                        raise ImageError(f"upstream status {resp.status}")
+                    if (resp.content_length or 0) > MAX_BYTES:
+                        raise ImageError("image too large")
+                    body = bytearray()
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        body += chunk
+                        if len(body) > MAX_BYTES:
+                            raise ImageError("image too large")
+                    return bytes(body)
+            raise ImageError("too many redirects")
+    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
         raise ImageError(f"download failed: {err}") from err
 
 

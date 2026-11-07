@@ -94,7 +94,20 @@ async def source(aiohttp_server):
         hits["n"] += 1
         return web.Response(body=b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n")
 
+    async def to(request):
+        """Redirect to the ``to`` query parameter (absolute or relative)."""
+        hits["n"] += 1
+        raise web.HTTPMovedPermanently(request.query["to"])
+
+    async def hop(request):
+        """``/hop/<n>`` redirects n more times on the same host, then to /a.png."""
+        hits["n"] += 1
+        n = int(request.match_info["n"])
+        raise web.HTTPFound(f"/hop/{n - 1}" if n > 1 else "/a.png")
+
     app = web.Application()
+    app.router.add_get("/to", to)
+    app.router.add_get("/hop/{n}", hop)
     app.router.add_get("/chunked.png", chunked)
     app.router.add_get("/bomb.png", bomb)
     app.router.add_get("/x.eps", eps)
@@ -175,7 +188,7 @@ async def test_image_non_http_scheme(hass: HomeAssistant, hass_client_no_auth) -
     assert resp.status == 404
 
 
-async def test_image_redirect_not_followed(
+async def test_image_redirect_to_other_loopback_port_rejected(
     hass: HomeAssistant, hass_client_no_auth, source
 ) -> None:
     data = await _setup(hass)
@@ -185,6 +198,134 @@ async def test_image_redirect_not_followed(
     resp = await client.get("/api/kidshub/img", params={"u": url, "s": "64"}, headers=AUTH)
     assert resp.status == 502
     assert source.hits["n"] == 1
+
+
+@pytest.fixture
+async def other(aiohttp_server):
+    """A second image server: another host:port than the registered URL."""
+    hits = {"n": 0}
+
+    async def png(request):
+        hits["n"] += 1
+        return web.Response(body=_png(), content_type="image/png")
+
+    app = web.Application()
+    app.router.add_get("/a.png", png)
+    server = await aiohttp_server(app)
+    server.hits = hits
+    return server
+
+
+def _resolve_as(monkeypatch, address: str) -> list[str]:
+    """Make the SSRF guard resolve every redirect host to ``address``."""
+    hosts: list[str] = []
+
+    async def resolve(hass, host, port):
+        hosts.append(host)
+        return [address]
+
+    monkeypatch.setattr(images_module, "_resolve", resolve)
+    return hosts
+
+
+async def _img(hass_client_no_auth, url: str):
+    client = await hass_client_no_auth()
+    return await client.get(
+        "/api/kidshub/img", params={"u": url, "s": "64"}, headers=AUTH
+    )
+
+
+async def test_image_redirect_to_public_host(
+    hass: HomeAssistant, hass_client_no_auth, source, other, monkeypatch
+) -> None:
+    hosts = _resolve_as(monkeypatch, "93.184.216.34")
+    data = await _setup(hass)
+    url = _url(source, "/to") + "?to=" + _url(other, "/a.png")
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 200
+    assert resp.content_type == "image/jpeg"
+    assert other.hits["n"] == 1
+    assert hosts == ["127.0.0.1"]  # only the redirect hop is resolved
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["127.0.0.1", "10.1.2.3", "192.168.1.20", "169.254.169.254", "::1", "0.0.0.0",
+     "224.0.0.1", "::ffff:10.0.0.1"],
+)
+async def test_image_redirect_to_private_rejected(
+    hass: HomeAssistant, hass_client_no_auth, source, other, monkeypatch, address
+) -> None:
+    _resolve_as(monkeypatch, address)
+    data = await _setup(hass)
+    url = _url(source, "/to") + "?to=" + _url(other, "/a.png")
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 502
+    assert other.hits["n"] == 0  # never fetched
+
+
+async def test_image_redirect_to_loopback_real_resolution(
+    hass: HomeAssistant, hass_client_no_auth, source, other
+) -> None:
+    """Without patching, another port on 127.0.0.1 resolves to loopback."""
+    data = await _setup(hass)
+    url = _url(source, "/to") + "?to=" + _url(other, "/a.png")
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 502
+    assert other.hits["n"] == 0
+
+
+@pytest.mark.parametrize(("hops", "status"), [(3, 200), (4, 502)])
+async def test_image_redirect_hop_limit(
+    hass: HomeAssistant, hass_client_no_auth, source, hops, status
+) -> None:
+    """Same-host redirects on the LAN are followed, at most 3 of them."""
+    data = await _setup(hass)
+    url = _url(source, f"/hop/{hops}")  # /hop/n answers with n redirects in total
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == status
+
+
+@pytest.mark.parametrize("target", ["ftp://example.com/a.png", "file:///etc/passwd"])
+async def test_image_redirect_non_http_rejected(
+    hass: HomeAssistant, hass_client_no_auth, source, monkeypatch, target
+) -> None:
+    hosts = _resolve_as(monkeypatch, "93.184.216.34")
+    data = await _setup(hass)
+    url = _url(source, "/to") + "?to=" + target
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 502
+    assert hosts == []
+
+
+async def test_image_relative_redirect_same_host(
+    hass: HomeAssistant, hass_client_no_auth, source, monkeypatch
+) -> None:
+    hosts = _resolve_as(monkeypatch, "10.0.0.1")  # would be rejected if checked
+    data = await _setup(hass)
+    url = _url(source, "/to") + "?to=/a.png"
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 200
+    assert hosts == []  # same host:port as the registered URL: not resolved
+
+
+async def test_image_private_registered_url_served(
+    hass: HomeAssistant, hass_client_no_auth, source, monkeypatch
+) -> None:
+    """The registered URL itself may be private (MA's /imageproxy on the LAN)."""
+    hosts = _resolve_as(monkeypatch, "192.168.1.5")
+    data = await _setup(hass)
+    url = _url(source, "/a.png")
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 200
+    assert hosts == []
 
 
 async def test_image_too_large(
