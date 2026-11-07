@@ -25,8 +25,10 @@ Echo-Show-Kinderzentrale für Home Assistant. KidsHub ist eine Home-Assistant-In
    KidsHub-App auf dem Echo Show eingeben. Danach erscheint das Gerät „KidsHub Paul“.
 3. **Optionen des Geräts** (Gerät → Konfigurieren):
    - **Zimmer:** Lichter, Schalter, Rollos usw., die das Kind bedienen darf.
-   - **Inhalte:** erlaubte Playlists (Musik), Alben/Hörbücher (Hörspiele) und Podcasts aus
-     Music Assistant.
+   - **Inhalte:** erlaubte Playlists (Musik), Alben/Hörbücher (Hörspiele), Podcasts und
+     Radiosender aus Music Assistant. Radiosender müssen dafür in der MA-Bibliothek sein
+     (MA: Suche → Radio → „Zur Bibliothek hinzufügen“). Radio zählt wie Musik: der Schalter
+     „Musik erlaubt“ sperrt auch Radio.
    - **Wecker-Extras:** Wecklicht (folgt dem Sonnenaufgang), Stopp-Taste und Weckmusik.
 4. **Music Assistant:** In Music Assistant den **Sendspin**-Player-Provider aktivieren und dort
    **„Unverschlüsselte Verbindungen erlauben“** einschalten (die App verbindet sich per

@@ -59,7 +59,7 @@ Ping/Pong übernimmt die WS-Ebene (Heartbeat 30 s). Die App verbindet sich mit B
 ```json
 {"type":"config","version":17,
  "child_name":"Paul",
- "tiles":{"music":true,"audiobooks":true,"podcasts":true},
+ "tiles":{"music":true,"audiobooks":true,"podcasts":true,"radio":true},
  "settings_visible":false,
  "music_enabled":true,
  "max_volume":60, "alarm_max_volume":40,
@@ -88,13 +88,14 @@ sonstiges dimmbares `light` → `dimmer`, `cover` → `cover`, alles andere → 
 
 **`now_playing`** (bei jedem Titelwechsel und alle 10 s während der Wiedergabe)
 ```json
-{"type":"now_playing","kind":"track"|"episode"|"audiobook"|"album_track",
+{"type":"now_playing","kind":"track"|"episode"|"audiobook"|"album_track"|"radio",
  "uri":"…","title":"…","subtitle":"…","image_url":"/api/kidshub/img?u=…",
  "duration_ms":183000,"elapsed_ms":42000,"stars":4,"container_uri":"…",
  "container_kind":"album"|"audiobook"|"playlist"|"podcast"|null}
 ```
 `container_kind` ist optional (ab Integration 0.1.1); fehlt es, ermittelt die App die Art aus früheren `browse`-Ergebnissen.
 Ist die Queue leer: `{"type":"now_playing","kind":null}`.
+Bei `kind:"radio"` (ab 0.1.5) ist `title` der Sendername, `subtitle` der gerade laufende Titel, sofern der Sender ihn mitschickt (sonst `""`; ein neuer Titel wird sofort gepusht), `duration_ms` 0, `stars` `null`, `container_kind` `null`. Die App zeigt keinen Fortschritt, kein Vor/Zurück und keine Sterne.
 
 **`alarm_cmd`**: `{"type":"alarm_cmd","cmd":"stop"}`
 **`sleep_cmd`**: `{"type":"sleep_cmd","cmd":"cancel"}` | `{"type":"sleep_cmd","cmd":"set","minutes":20}`
@@ -114,7 +115,7 @@ Sonnenaufgangs alle 15 s)
 
 | type | Felder | Ergebnis |
 |---|---|---|
-| `browse` | `section`: `music` \| `audiobooks` \| `podcasts`; optional `parent_uri`; `sort`: `default` \| `stars` | `{"items":[Item]}` |
+| `browse` | `section`: `music` \| `audiobooks` \| `podcasts` \| `radio`; optional `parent_uri`; `sort`: `default` \| `stars` | `{"items":[Item]}` |
 | `favorites` | `kind`: `track` \| `episode` \| `audiobook` | `{"items":[Item]}` (≥ 4 Sterne, absteigend nach Sternen, dann zuletzt bewertet) |
 | `play` | `uris`: [string] (1..n), `start_index` (default 0), `resume` (bool, default true), `from_start` (bool, default false) | `{}` |
 | `control` | `cmd`: `pause` \| `resume` \| `next` \| `previous` \| `seek`; `position_ms` bei seek | `{}` |
@@ -126,7 +127,7 @@ Sonnenaufgangs alle 15 s)
 
 **Item**
 ```json
-{"uri":"…","kind":"playlist"|"album"|"audiobook"|"podcast"|"episode"|"track"|"album_track"|"favorites",
+{"uri":"…","kind":"playlist"|"album"|"audiobook"|"podcast"|"episode"|"track"|"album_track"|"radio"|"favorites",
  "title":"…","subtitle":"…","image_url":"/api/kidshub/img?u=…&s=256",
  "stars":null,"progress":{"position_ms":0,"duration_ms":0,"finished":false}}
 ```
@@ -143,11 +144,12 @@ Sonnenaufgangs alle 15 s)
   `kidshub://favorites/episode`.
 - `podcasts` mit `parent_uri` = Sendung: Folgen, `sort=default` → eine angefangene
   (nicht fertige, `position_ms` > 0) Folge oben, danach neu → alt. `sort=stars` → nach Sternen.
+- `radio` (ab 0.1.5): die freigegebenen Radiosender (Option `radios`), ohne Favoriten-Kachel. Sender haben keine Kinder (`parent_uri` → `invalid`) und sind nicht bewertbar.
 - `parent_uri` = `kidshub://favorites/...` → wie `favorites`.
 - Ein `parent_uri`, das nicht freigegeben ist, ergibt den Fehler `not_allowed`.
 
 `play`-Semantik:
-- Ist `music_enabled` false und der Inhalt Musik → Fehler `not_allowed`.
+- Ist `music_enabled` false und der Inhalt Musik oder ein Radiosender → Fehler `not_allowed`. Wird `music_enabled` während Musik oder Radio läuft ausgeschaltet, stoppt die Integration die Wiedergabe und leert die Queue.
 - `resume=true` bei `episode` / `audiobook` / `album`: Die Integration startet an der
   gespeicherten Stelle (Track-Index + Position). `from_start=true` setzt die Stelle auf 0 zurück.
 - Gespielt wird über MA auf **dem Sendspin-Player dieses Geräts**. MA ≥ 2.10 vergibt dafür eine eigene `player_id`; die Integration findet den Player über `sendspin.client_id` in dessen `output_protocols` (Fallback: Name).

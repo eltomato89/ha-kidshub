@@ -97,6 +97,9 @@
       "tile_podcasts": {
         "name": "Podcasts tile"
       },
+      "tile_radio": {
+        "name": "Radio tile"
+      },
       "alarm_mon": {
         "name": "Alarm Monday"
       },
@@ -198,7 +201,8 @@
         "data": {
           "playlists": "Playlists (music)",
           "audiobooks": "Albums and audiobooks",
-          "podcasts": "Podcasts"
+          "podcasts": "Podcasts",
+          "radios": "Radio stations"
         }
       },
       "settings": {

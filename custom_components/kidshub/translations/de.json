@@ -97,6 +97,9 @@
       "tile_podcasts": {
         "name": "Kachel Podcasts"
       },
+      "tile_radio": {
+        "name": "Kachel Radio"
+      },
       "alarm_mon": {
         "name": "Wecker Montag"
       },
@@ -198,7 +201,8 @@
         "data": {
           "playlists": "Playlists (Musik)",
           "audiobooks": "Alben und Hörbücher",
-          "podcasts": "Podcasts"
+          "podcasts": "Podcasts",
+          "radios": "Radiosender"
         }
       },
       "settings": {

@@ -67,6 +67,33 @@ def is_http_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
+WIKIMEDIA_HOST = "upload.wikimedia.org"
+WIKIMEDIA_THUMB_WIDTH = 500  # Wikimedia only renders its standard thumbnail widths
+
+
+def raster_url(url: str) -> str:
+    """Return a raster (PNG) URL for an SVG on Wikimedia, else ``url`` unchanged.
+
+    Pillow cannot decode SVG; Radio Browser station logos are often SVGs on
+    Wikimedia Commons, which renders them as PNG thumbnails:
+    ``/wikipedia/<project>/<a>/<ab>/<name>.svg`` ->
+    ``/wikipedia/<project>/thumb/<a>/<ab>/<name>.svg/500px-<name>.svg.png``.
+    """
+    parsed = urlparse(url)
+    parts = parsed.path.split("/")
+    if (
+        (parsed.hostname or "").lower() != WIKIMEDIA_HOST
+        or not parsed.path.lower().endswith(".svg")
+        or parsed.query
+        or len(parts) != 6
+        or parts[:2] != ["", "wikipedia"]
+    ):
+        return url
+    _, wiki, project, a, ab, name = parts
+    path = f"/{wiki}/{project}/thumb/{a}/{ab}/{name}/{WIKIMEDIA_THUMB_WIDTH}px-{name}.png"
+    return parsed._replace(scheme="https", path=path).geturl()
+
+
 def _origin(url: str) -> tuple[str, int]:
     """Return ``(host, port)`` of an http(s) URL, with the scheme's default port."""
     parsed = urlparse(url)
@@ -185,7 +212,7 @@ async def _produce(
     hass: HomeAssistant, cache: ScaledCache, key: tuple[str, int]
 ) -> bytes:
     try:
-        raw = await _download(hass, key[0])
+        raw = await _download(hass, raster_url(key[0]))
         async with cache.decodes:
             result = await hass.async_add_executor_job(_scale, raw, key[1])
         cache.put(key, result)

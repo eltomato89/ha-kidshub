@@ -175,6 +175,7 @@ CONTENT_LIBRARIES: dict[str, tuple[str, ...]] = {
     "playlists": ("playlist",),
     "audiobooks": ("album", "audiobook"),
     "podcasts": ("podcast",),
+    "radios": ("radio",),
 }
 
 
@@ -373,7 +374,7 @@ class DeviceOptionsFlow(OptionsFlow):
     async def async_step_content(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose the allowed playlists, albums/audiobooks and podcasts."""
+        """Choose the allowed playlists, albums/audiobooks, podcasts and radio stations."""
         if user_input is not None and user_input:
             for key in CONTENT_LIBRARIES:
                 self._options[key] = list(user_input.get(key) or [])

@@ -11,7 +11,9 @@ queue/music/player API) with the MA 2.10.9 add-on (``scripts/ma_probe.py``):
   ``mass.connection.connected``. ``entry.data["url"]`` of the add-on is the container
   host from hassio discovery (``http://<slug>-music-assistant:8094``, not reachable from
   the LAN); ``mass.server_info.base_url`` is MA's LAN address and is used instead.
-- Library: ``mass.music.get_library_playlists/_albums/_audiobooks/_podcasts(limit=, offset=)``.
+- Library: ``mass.music.get_library_playlists/_albums/_audiobooks/_podcasts/_radios(limit=, offset=)``.
+- Radio stations are live streams without children; the current song of a station is
+  ``QueueItem.streamdetails.stream_title`` (``"Artist - Title"`` or None).
 - Children: ``mass.music.get_playlist_tracks(item_id, provider)``,
   ``get_album_tracks(item_id, provider)``, ``get_podcast_episodes(item_id, provider)``.
   Audiobooks have no browsable children (chapters are part of the item).
@@ -46,6 +48,7 @@ then the output protocols, then the player name (``KidsHub <child>``).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import ipaddress
 import logging
 import time
@@ -87,7 +90,7 @@ INFO_TTL = 300.0  # seconds a fallback Sendspin host is reused
 
 SendspinSource = Literal["override", "server_info", "ma_info", "ha_host", "none"]
 
-LibraryKind = Literal["playlist", "album", "audiobook", "podcast"]
+LibraryKind = Literal["playlist", "album", "audiobook", "podcast", "radio"]
 Command = Literal["pause", "resume", "next", "previous", "stop", "clear"]
 
 _KIND_BY_MEDIA_TYPE = {
@@ -97,6 +100,7 @@ _KIND_BY_MEDIA_TYPE = {
     "audiobook": "audiobook",
     "podcast": "podcast",
     "podcast_episode": "episode",
+    "radio": "radio",
 }
 
 
@@ -105,6 +109,7 @@ _LIBRARY_FETCH = {
     "album": "get_library_albums",
     "audiobook": "get_library_audiobooks",
     "podcast": "get_library_podcasts",
+    "radio": "get_library_radios",
 }
 
 
@@ -604,6 +609,13 @@ class MaAdapter:
         queue_item = queue.current_item
         if queue_item is not None and queue_item.media_item is not None:
             current = self._to_item(mass, base_url, queue_item.media_item)
+            if current.kind == "radio":
+                # the station's current song (ICY metadata), if it sends one
+                details = getattr(queue_item, "streamdetails", None)
+                title = getattr(details, "stream_title", None)
+                current = dataclasses.replace(
+                    current, subtitle=title if isinstance(title, str) else ""
+                )
         sources = getattr(queue, "sources", None) or []
         container = sources[0] if sources else None
         if str(getattr(container, "media_type", "")) not in _CONTAINER_MEDIA_TYPES:

@@ -31,7 +31,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "day_brightness": 70,
     "music_enabled": True,
     "settings_visible": False,
-    "tiles": {"music": True, "audiobooks": True, "podcasts": True},
+    "tiles": {"music": True, "audiobooks": True, "podcasts": True, "radio": True},
 }
 
 

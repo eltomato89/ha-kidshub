@@ -21,11 +21,12 @@ FAVORITES_MIN_STARS = 4
 CHILDREN_TTL = 60.0
 IMAGE_REGISTRY_SIZE = 2000
 
-# section -> (option key, library kinds, favorites kind)
-SECTIONS: dict[str, tuple[str, tuple[str, ...], str]] = {
+# section -> (option key, library kinds, favorites kind or None)
+SECTIONS: dict[str, tuple[str, tuple[str, ...], str | None]] = {
     "music": ("playlists", ("playlist",), "track"),
     "audiobooks": ("audiobooks", ("album", "audiobook"), "audiobook"),
     "podcasts": ("podcasts", ("podcast",), "episode"),
+    "radio": ("radios", ("radio",), None),
 }
 CONTENT_OPTIONS = tuple(key for key, _, _ in SECTIONS.values())
 
@@ -147,7 +148,8 @@ class ContentService:
             except InvalidRequest:
                 return None
         results = await asyncio.gather(
-            *(self.children(c) for c in containers), return_exceptions=True
+            *(self.children(c) for c in containers if "://radio/" not in c),
+            return_exceptions=True,
         )
         for result in results:
             if isinstance(result, BaseException):
@@ -258,7 +260,7 @@ class ContentService:
         sort = msg.get("sort", "default")
         parent = msg.get("parent_uri")
         if section not in SECTIONS:
-            raise InvalidRequest("section must be music, audiobooks or podcasts")
+            raise InvalidRequest("section must be music, audiobooks, podcasts or radio")
         if sort not in SORTS:
             raise InvalidRequest("sort must be default or stars")
         if parent is not None and not isinstance(parent, str):
@@ -267,6 +269,8 @@ class ContentService:
             return {"items": self.favorites(parent.removeprefix(FAVORITES_PREFIX))}
         if parent is None:
             return {"items": await self._browse_root(section)}
+        if section == "radio":
+            raise InvalidRequest("radio stations have no children")
         if parent not in self.allowed(section):
             raise NotAllowed("content not allowed")
         children = await self.children(parent, fresh=True)
@@ -284,7 +288,7 @@ class ContentService:
         allowed = set(self.allowed(section))
         libraries = await asyncio.gather(*(self.ma.library(k) for k in kinds))
         items: list[dict[str, Any]] = []
-        if self.favorites(fav_kind):
+        if fav_kind is not None and self.favorites(fav_kind):
             items.append(self._favorites_tile(fav_kind))
         seen: set[str] = set()
         for library in libraries:

@@ -23,7 +23,7 @@ async def test_defaults(hass):
     assert st["max_volume"] == 60
     assert st["alarm"]["weekdays"] == [0, 1, 2, 3, 4]
     assert st["night"]["brightness"] == 5
-    assert st["tiles"] == {"music": True, "audiobooks": True, "podcasts": True}
+    assert st["tiles"] == {"music": True, "audiobooks": True, "podcasts": True, "radio": True}
     assert "sendspin" not in st and "room" not in st
     assert "button_required" not in st["alarm"]
     st["alarm"]["weekdays"].append(5)
@@ -126,3 +126,24 @@ async def test_load_tolerates_schema_drift(hass, hass_storage, caplog):
     assert s.get_progress("p-extra").track_index == 1
     assert s.get_progress("p-missing") is None
     assert "Skipping malformed" in caplog.text
+
+
+async def test_stored_tiles_gain_radio_default(hass, hass_storage):
+    """Settings saved before 0.1.5 have no radio tile; it defaults to shown."""
+    hass_storage["kidshub.e1"] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": "kidshub.e1",
+        "data": {
+            "settings": {
+                "tiles": {"music": True, "audiobooks": False, "podcasts": True}
+            },
+            "ratings": {},
+            "progress": {},
+        },
+    }
+    store = KidStore(hass, "e1")
+    await store.async_load()
+    assert store.settings["tiles"] == {
+        "music": True, "audiobooks": False, "podcasts": True, "radio": True,
+    }

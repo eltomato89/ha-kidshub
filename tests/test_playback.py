@@ -999,3 +999,77 @@ async def test_wake_play_hoerspiel_seeks_one_second(
     assert (await _request(ws, 2, "wake_play"))["success"]
     assert fake.play_calls == [(PLAYER, [BOOK.uri], 0, 1000), (PLAYER, [POD.uri], 0, 1000)]
     await ws.close()
+
+
+# -- radio ------------------------------------------------------------------------
+
+RADIO = item("library://radio/1", "radio", "Hellweg Radio")
+RADIO_OFF = item("library://radio/2", "radio", "Nicht frei")
+RADIO_OPTIONS = {**OPTIONS, "radios": [RADIO.uri]}
+
+
+def _radio_fake() -> FakeMa:
+    fake = _fake()
+    fake._library["radio"] = [RADIO, RADIO_OFF]
+    return fake
+
+
+async def test_play_radio(hass: HomeAssistant, hass_client_no_auth) -> None:
+    fake = _radio_fake()
+    await _setup(hass, fake, RADIO_OPTIONS)
+    ws = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "play", uris=[RADIO.uri])
+    assert res["success"] is True, res
+    assert fake.play_calls == [(PLAYER, [RADIO.uri], 0, 0)]
+    # not allowed for this child; radio has no children to look into
+    res = await _request(ws, 2, "play", uris=[RADIO_OFF.uri])
+    assert res["error"]["code"] == "not_allowed"
+    assert RADIO.uri not in fake.children_calls
+    await ws.close()
+
+
+async def test_music_disabled_blocks_radio(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _radio_fake()
+    await _setup(hass, fake, RADIO_OPTIONS)
+    await _device(hass).update_settings({"music_enabled": False})
+    ws = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "play", uris=[RADIO.uri])
+    assert res["error"]["code"] == "not_allowed"
+    assert fake.play_calls == []
+    await ws.close()
+
+
+async def test_music_disable_stops_radio(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _radio_fake()
+    await _setup(hass, fake, RADIO_OPTIONS)
+    device = _device(hass)
+    fake.emit_queue(PLAYER, _snap(RADIO))
+    await hass.async_block_till_done()
+    await device.update_settings({"music_enabled": False})
+    await hass.async_block_till_done()
+    assert fake.command_calls == [(PLAYER, "stop"), (PLAYER, "clear")]
+
+
+async def test_radio_now_playing_and_song_change(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _radio_fake()
+    await _setup(hass, fake, RADIO_OPTIONS)
+    ws = await _connect(await hass_client_no_auth())
+    fake.emit_queue(PLAYER, _snap(RADIO))
+    msg = await _next(ws, "now_playing")
+    assert msg["kind"] == "radio"
+    assert msg["title"] == "Hellweg Radio"
+    assert msg["stars"] is None
+    assert msg["container_kind"] is None
+    # a new song on the station is pushed right away (no 10 s throttle)
+    song = item(RADIO.uri, "radio", "Hellweg Radio", "Band - Lied")
+    fake.emit_queue(PLAYER, _snap(song))
+    msg = await _next(ws, "now_playing")
+    assert msg["subtitle"] == "Band - Lied"
+    assert _device(hass).store.get_progress(RADIO.uri) is None
+    await ws.close()

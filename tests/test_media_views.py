@@ -543,3 +543,21 @@ async def test_tts_error_code_over_ws(hass: HomeAssistant, hass_client_no_auth) 
     res = await ws.receive_json()
     assert res["error"]["code"] == "tts_failed"
     await ws.close()
+
+
+def test_raster_url_wikimedia_svg() -> None:
+    from custom_components.kidshub.images import raster_url
+
+    svg = "https://upload.wikimedia.org/wikipedia/commons/3/37/Logo_von_Hellweg_Radio.svg"
+    assert raster_url(svg) == (
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/"
+        "Logo_von_Hellweg_Radio.svg/500px-Logo_von_Hellweg_Radio.svg.png"
+    )
+    assert raster_url(svg.replace("https", "http")).startswith("https://")
+    for url in (
+        "https://upload.wikimedia.org/wikipedia/commons/3/37/Logo.png",
+        "https://example.com/wikipedia/commons/3/37/Logo.svg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/L.svg/500px-L.svg.png",
+        svg + "?x=1",
+    ):
+        assert raster_url(url) == url

@@ -44,9 +44,9 @@ FROM_START_SEEK_MS = 1000  # MA treats seek 0 as "resume at MA's own position"
 FROM_START_KINDS = {"album", "episode", "audiobook"}
 WAKE_FROM_START_TYPES = {"audiobook", "podcast_episode", "podcast"}  # MA media types
 
-MUSIC_KINDS = {"track", "playlist"}
+MUSIC_KINDS = {"track", "playlist", "radio"}  # blocked by music_enabled
 CONTAINER_KINDS = {"playlist", "album", "podcast"}
-NOW_PLAYING_KINDS = {"track", "episode", "audiobook"}
+NOW_PLAYING_KINDS = {"track", "episode", "audiobook", "radio"}
 COMMANDS = {"pause", "resume", "next", "previous"}
 
 
@@ -359,12 +359,12 @@ class PlaybackService:
             self.device.store.set_album_context(None)
 
     def _music_blocked(self) -> bool:
-        """Return whether music is disabled and the queue holds music."""
+        """Return whether music is disabled and the queue holds music or radio."""
         cur = self._current
         return (
             not self.device.store.settings["music_enabled"]
             and cur is not None
-            and cur.kind == "track"
+            and cur.kind in ("track", "radio")
         )
 
     async def _handle_control(self, msg: dict[str, Any]) -> dict[str, Any]:
@@ -466,7 +466,13 @@ class PlaybackService:
             prev is not None and cur is not None and prev.item.uri != cur.item.uri
         )
         state_changed = (
-            prev is not None and cur is not None and prev.playing != cur.playing
+            prev is not None
+            and cur is not None
+            and (
+                prev.playing != cur.playing
+                # a radio station's current song
+                or prev.item.subtitle != cur.item.subtitle
+            )
         )
         if item_changed and prev is not None:
             advanced = cur is not None and cur.index == prev.index + 1

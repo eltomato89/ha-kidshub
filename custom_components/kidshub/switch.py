@@ -21,6 +21,7 @@ FLAGS: dict[str, tuple[str, ...]] = {
     "tile_music": ("tiles", "music"),
     "tile_audiobooks": ("tiles", "audiobooks"),
     "tile_podcasts": ("tiles", "podcasts"),
+    "tile_radio": ("tiles", "radio"),
 }
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 

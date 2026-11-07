@@ -62,7 +62,7 @@ async def test_device_diagnostics(hass: HomeAssistant, hass_client) -> None:
     assert TOKEN_HASH not in json.dumps(diag)
     assert diag["entry"]["data"]["token_hash"] == "**REDACTED**"
     assert diag["entry"]["data"]["device_id"] == "dev-a"
-    assert diag["versions"]["integration"] == "0.1.4"
+    assert diag["versions"]["integration"] == "0.1.5"
     assert diag["versions"]["ma_server"] == "2.10.9"
     assert diag["versions"]["home_assistant"]
     assert diag["device"]["connected"] is False
@@ -103,7 +103,7 @@ async def test_settings_diagnostics(hass: HomeAssistant, hass_client) -> None:
     assert diag["entry"]["options"]["tts_engine"] == "tts.x"
     assert diag["sendspin"]["url"] == "ws://10.1.2.3:8927/sendspin"
     assert diag["sendspin"]["source"] == "override"
-    assert diag["versions"]["integration"] == "0.1.4"
+    assert diag["versions"]["integration"] == "0.1.5"
     assert "device" not in diag
 
 

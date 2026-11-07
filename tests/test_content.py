@@ -663,3 +663,55 @@ def test_snapshot_container_only_for_containers() -> None:
     snap = adapter._snapshot(mass, "", queue(src("library://album/1", "album")))
     assert snap.container_uri == "library://album/1"
     assert adapter._snapshot(mass, "", queue()).container_uri is None
+
+
+RADIO = item("library://radio/1", "radio", "Hellweg Radio")
+RADIO_OFF = item("library://radio/2", "radio", "Nicht frei")
+
+
+async def test_browse_radio(hass: HomeAssistant, hass_client_no_auth) -> None:
+    fake = _fake(library={"playlist": [PL1], "radio": [RADIO, RADIO_OFF]})
+    await _setup(hass, fake, {**OPTIONS, "radios": [RADIO.uri]})
+    ws, _ = await _connect(await hass_client_no_auth())
+    res = await _request(ws, 1, "browse", section="radio", sort="default")
+    assert _uris(res) == [RADIO.uri]  # no favorites tile for radio
+    assert res["result"]["items"][0]["kind"] == "radio"
+    assert "progress" not in res["result"]["items"][0]
+    res = await _request(
+        ws, 2, "browse", section="radio", parent_uri=RADIO.uri, sort="default"
+    )
+    assert res["error"]["code"] == "invalid"
+    # radio is not rateable
+    res = await _request(ws, 3, "rate", uri=RADIO.uri, kind="radio", stars=5)
+    assert res["error"]["code"] == "invalid"
+    await ws.close()
+
+
+def test_snapshot_radio_stream_title() -> None:
+    """The current song of a station becomes the now-playing subtitle."""
+    from types import SimpleNamespace
+
+    from music_assistant_models.enums import PlaybackState
+
+    adapter = MaAdapter.__new__(MaAdapter)
+    mass = SimpleNamespace(get_media_item_image_url=lambda obj: None)
+    station = SimpleNamespace(
+        uri="library://radio/1", media_type="radio", name="Hellweg Radio"
+    )
+
+    def queue(title):
+        return SimpleNamespace(
+            state=PlaybackState.IDLE,
+            elapsed_time=0,
+            current_item=SimpleNamespace(
+                media_item=station, streamdetails=SimpleNamespace(stream_title=title)
+            ),
+            current_index=0,
+            sources=[],
+        )
+
+    snap = adapter._snapshot(mass, "", queue("Band - Lied"))
+    assert snap.current.kind == "radio"
+    assert snap.current.title == "Hellweg Radio"
+    assert snap.current.subtitle == "Band - Lied"
+    assert adapter._snapshot(mass, "", queue(None)).current.subtitle == ""
