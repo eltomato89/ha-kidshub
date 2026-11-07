@@ -46,6 +46,7 @@ then the output protocols, then the player name (``KidsHub <child>``).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -54,8 +55,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urljoin, urlparse
 
+from homeassistant.components.network import async_get_source_ip
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .const import CONF_SENDSPIN_URL, DOMAIN, ENTRY_TYPE, ENTRY_TYPE_SETTINGS
 from .device import InvalidRequest, MaUnavailable
 
 try:
@@ -78,6 +82,10 @@ SENDSPIN_PORT = 8927
 PAGE_SIZE = 500
 MA_TIMEOUT = 10.0  # seconds per MA request
 LIBRARY_TIMEOUT = 30.0  # seconds for a whole (paged) library listing
+INFO_TIMEOUT = 5.0  # seconds for MA's ``GET /info`` (Sendspin host fallback)
+INFO_TTL = 300.0  # seconds a fallback Sendspin host is reused
+
+SendspinSource = Literal["override", "server_info", "ma_info", "ha_host", "none"]
 
 LibraryKind = Literal["playlist", "album", "audiobook", "podcast"]
 Command = Literal["pause", "resume", "next", "previous", "stop", "clear"]
@@ -104,9 +112,43 @@ _CONTAINER_MEDIA_TYPES = {"album", "playlist", "podcast", "audiobook"}
 
 
 def _base_url(mass: Any) -> str | None:
-    """Return MA's own ``base_url`` (LAN address MA gives its players)."""
-    url = getattr(getattr(mass, "server_info", None), "base_url", None)
-    return url if isinstance(url, str) and url else None
+    """Return MA's own address (``internal_url``, older MA: ``base_url``)."""
+    info = getattr(mass, "server_info", None)
+    for attr in ("internal_url", "base_url"):
+        url = getattr(info, attr, None)
+        if isinstance(url, str) and url:
+            return url
+    return None
+
+
+def usable_host(host: str | None, *, entry_host: str | None, addon: bool) -> bool:
+    """Return whether the app can reach MA's Sendspin port at ``host``.
+
+    Rejected: empty, loopback/unspecified/link-local addresses, ``localhost``,
+    single-label names (add-on container names like ``d5369777-music-assistant``),
+    ``*.hass.io`` (Supervisor-internal DNS) and, for the add-on, the host of the
+    MA entry URL (hassio discovery hands out the container host). A standalone
+    MA may well be reached under the entry host.
+    """
+    if not host:
+        return False
+    name = host.lower().rstrip(".")
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if ip.is_loopback or ip.is_unspecified or ip.is_link_local:
+            return False
+    elif "." not in name or name.endswith(".hass.io"):
+        return False
+    return not (addon and entry_host is not None and name == entry_host.lower())
+
+
+def _ws_url(host: str) -> str:
+    if ":" in host:
+        host = f"[{host}]"
+    return f"ws://{host}:{SENDSPIN_PORT}/sendspin"
 
 
 @dataclass(frozen=True)
@@ -180,6 +222,10 @@ class MaAdapter:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
+        # Sendspin fallback (MA's /info or the HA host): (url, source, info, time)
+        self._fallback: tuple[str | None, SendspinSource, dict[str, Any], float] | None = (
+            None
+        )
 
     # -- entry / client -------------------------------------------------
 
@@ -311,28 +357,150 @@ class MaAdapter:
 
     # -- sendspin / players ---------------------------------------------
 
-    def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
-        """Return the ``config.sendspin`` block, ``None`` without a connected MA.
+    def _override_url(self) -> str | None:
+        """Return the Sendspin URL set in the KidsHub settings entry, if any."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_SETTINGS:
+                url = str(entry.options.get(CONF_SENDSPIN_URL) or "").strip()
+                return url or None
+        return None
 
-        The host is taken from MA's own ``base_url`` (what MA tells its players).
-        The entry URL is never used: for the add-on it is the container host
-        (hassio discovery, e.g. ``http://d5369777-music-assistant:8094``), which
-        the app cannot resolve. The block is pushed again on MA entry changes.
-        """
+    def _server_view(self) -> tuple[Any, str | None, bool] | None:
+        """Return ``(mass, entry host, is add-on)`` of a connected MA, else None."""
         try:
             mass, _ = self._client()
         except MaUnavailable:
             return None
-        url = _base_url(mass)
-        host = urlparse(str(url or "")).hostname
-        if not host:
+        entry = self._loaded_entry()
+        entry_url = str(entry.data.get("url", "")) if entry is not None else ""
+        entry_host = urlparse(entry_url).hostname
+        info = getattr(mass, "server_info", None)
+        addon = bool(getattr(info, "homeassistant_addon", False)) or (
+            entry_host is not None
+            and not usable_host(entry_host, entry_host=None, addon=False)
+        )
+        return mass, entry_host, addon
+
+    def sendspin_url(self) -> tuple[str | None, SendspinSource]:
+        """Return the Sendspin URL for the app and where it came from.
+
+        Order: the override of the settings entry; MA's own address from
+        ``server_info``; MA's ``GET /info`` and, for the add-on, the HA host
+        (both looked up by ``async_refresh_sendspin``). A host the app cannot
+        reach (``usable_host``) is never returned.
+        """
+        override = self._override_url()
+        if override:
+            return override, "override"
+        view = self._server_view()
+        if view is None:
+            return None, "none"
+        mass, entry_host, addon = view
+        host = urlparse(_base_url(mass) or "").hostname
+        if usable_host(host, entry_host=entry_host, addon=addon):
+            assert host is not None
+            return _ws_url(host), "server_info"
+        if self._fallback is not None:
+            return self._fallback[0], self._fallback[1]
+        return None, "none"
+
+    async def async_refresh_sendspin(self) -> None:
+        """Look up a fallback Sendspin host if ``server_info`` has no usable one."""
+        if self._override_url():
+            return
+        view = self._server_view()
+        if view is None:
+            return
+        mass, entry_host, addon = view
+        if usable_host(
+            urlparse(_base_url(mass) or "").hostname, entry_host=entry_host, addon=addon
+        ):
+            return
+        if self._fallback is not None and time.monotonic() - self._fallback[3] < INFO_TTL:
+            return
+        entry = self._loaded_entry()
+        entry_url = str(entry.data.get("url", "")) if entry is not None else ""
+        info = await self._fetch_info(entry_url)
+        addon = addon or info.get("homeassistant_addon") is True
+        url: str | None = None
+        source: SendspinSource = "none"
+        for key in ("internal_url", "base_url"):
+            host = urlparse(str(info.get(key) or "")).hostname
+            if usable_host(host, entry_host=entry_host, addon=addon):
+                assert host is not None
+                url, source = _ws_url(host), "ma_info"
+                break
+        if url is None and addon:
+            # the add-on runs on the HA host (host network): same address
+            try:
+                ip = await async_get_source_ip(self.hass)
+            except Exception:  # noqa: BLE001 - network integration missing/failing
+                _LOGGER.debug("No HA host address for the Sendspin fallback")
+                ip = None
+            if usable_host(ip, entry_host=entry_host, addon=addon):
+                assert ip is not None
+                url, source = _ws_url(ip), "ha_host"
+        _LOGGER.debug("Sendspin fallback: %s (%s)", url, source)
+        self._fallback = (url, source, info, time.monotonic())
+
+    async def _fetch_info(self, entry_url: str) -> dict[str, Any]:
+        """Return MA's public ``GET /info`` (empty on any failure)."""
+        if not entry_url:
+            return {}
+        try:
+            async with asyncio.timeout(INFO_TIMEOUT):
+                resp = await async_get_clientsession(self.hass).get(
+                    entry_url.rstrip("/") + "/info"
+                )
+                resp.raise_for_status()
+                info = await resp.json(content_type=None)
+        except Exception as err:  # noqa: BLE001 - any failure means no info
+            _LOGGER.debug("MA /info at %s failed: %s", entry_url, err)
+            return {}
+        return info if isinstance(info, dict) else {}
+
+    def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
+        """Return the ``config.sendspin`` block, ``None`` without a reachable address.
+
+        The entry URL is never used: for the add-on it is the container host
+        (hassio discovery, e.g. ``http://d5369777-music-assistant:8094``), which
+        the app cannot resolve. The block is pushed again on MA entry changes.
+        """
+        url, _ = self.sendspin_url()
+        if url is None:
             return None
-        if ":" in host:
-            host = f"[{host}]"
         return {
-            "url": f"ws://{host}:{SENDSPIN_PORT}/sendspin",
+            "url": url,
             "client_id": f"kidshub-{device_id}",
             "name": f"KidsHub {child_name}",
+        }
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return what the Sendspin address was computed from (no secrets)."""
+        entry = self._loaded_entry()
+        mass = getattr(getattr(entry, "runtime_data", None), "mass", None)
+        info = getattr(mass, "server_info", None)
+        url, source = self.sendspin_url()
+        fallback = self._fallback
+        return {
+            "connected": self.available,
+            "entry_url": str(entry.data.get("url", "")) if entry is not None else None,
+            "server_info": None
+            if info is None
+            else {
+                key: getattr(info, key, None)
+                for key in (
+                    "server_version",
+                    "base_url",
+                    "internal_url",
+                    "homeassistant_addon",
+                )
+            },
+            "fallback": None
+            if fallback is None
+            else {"url": fallback[0], "source": fallback[1], "info": fallback[2]},
+            "sendspin_url": url,
+            "source": source,
         }
 
     async def player_id_for(self, client_id: str, name: str | None = None) -> str | None:

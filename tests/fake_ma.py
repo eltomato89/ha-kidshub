@@ -84,6 +84,9 @@ class FakeMa:
     def sendspin_info(self, device_id: str, child_name: str) -> dict[str, Any] | None:
         return self._sendspin
 
+    async def async_refresh_sendspin(self) -> None:
+        """Nothing to look up."""
+
     async def player_id_for(self, client_id: str, name: str | None = None) -> str | None:
         self._check()
         return self._players.get(client_id)

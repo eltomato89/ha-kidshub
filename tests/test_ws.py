@@ -512,3 +512,64 @@ async def test_failing_connected_callback_is_logged_not_fatal(
     assert device.connected
     assert "boom" in caplog.text
     await ws.close()
+
+
+async def _pair(hass: HomeAssistant, client) -> dict:
+    """Complete a pairing over HTTP without creating the entry (flow not finished)."""
+    pending = hass.data[DOMAIN].pairing.start("Paul")
+    resp = await client.post("/api/kidshub/pair", json={"code": pending.code})
+    assert resp.status == 200
+    return await resp.json()
+
+
+async def test_auth_right_after_pairing_waits_for_entry(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """Live race: the app connects before the config entry exists/loads."""
+    assert await async_setup_component(hass, DOMAIN, {})
+    client = await hass_client_no_auth()
+    body = await _pair(hass, client)
+    ws = await _auth(client, device_id=body["device_id"], token=body["token"])
+    await asyncio.sleep(0.1)  # session is holding, no answer yet
+    entry = _make_entry(hass, body["device_id"], body["token"])
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert (await asyncio.wait_for(ws.receive_json(), 2)) == {"type": "auth_ok"}
+    assert (await ws.receive_json())["type"] == "config"
+    await ws.close()
+
+
+@lingering_heartbeat
+async def test_auth_right_after_pairing_entry_late_closes_without_invalid(
+    hass: HomeAssistant, hass_client_no_auth, monkeypatch
+) -> None:
+    monkeypatch.setattr(ws_module, "PAIRING_HOLD", 0.1)
+    assert await async_setup_component(hass, DOMAIN, {})
+    client = await hass_client_no_auth()
+    body = await _pair(hass, client)
+    ws = await _auth(client, device_id=body["device_id"], token=body["token"])
+    await _closed_without_auth_invalid(ws)
+    # the token still counts on the next attempt
+    assert hass.data[DOMAIN].pairing.fresh_token_valid(body["device_id"], body["token"])
+
+
+@lingering_heartbeat
+async def test_auth_right_after_pairing_wrong_token_is_invalid(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    assert await async_setup_component(hass, DOMAIN, {})
+    client = await hass_client_no_auth()
+    body = await _pair(hass, client)
+    ws = await _auth(client, device_id=body["device_id"], token="nope")
+    assert (await ws.receive_json()) == {"type": "auth_invalid"}
+    await _closed_by_server(ws)
+
+
+async def test_entry_load_ends_fresh_pairing(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    assert await async_setup_component(hass, DOMAIN, {})
+    client = await hass_client_no_auth()
+    body = await _pair(hass, client)
+    entry = _make_entry(hass, body["device_id"], body["token"])
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert not hass.data[DOMAIN].pairing.fresh_token_valid(body["device_id"], body["token"])

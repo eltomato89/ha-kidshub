@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 import voluptuous as vol
 from homeassistant.config_entries import (
@@ -19,6 +20,7 @@ from . import async_get_data
 from .const import (
     CONF_CHILD_NAME,
     CONF_DEVICE_ID,
+    CONF_SENDSPIN_URL,
     CONF_TOKEN_HASH,
     CONF_TTS_ENGINE,
     CONF_TTS_LANGUAGE,
@@ -182,13 +184,51 @@ def _suggested(key: str, value: Any) -> vol.Optional:
     return vol.Optional(key, description={"suggested_value": value})
 
 
+def _valid_sendspin_url(url: str) -> bool:
+    """Return whether ``url`` is a ``ws://``/``wss://`` URL with a host."""
+    try:
+        parsed = urlparse(url)
+        parsed.port  # noqa: B018 - raises ValueError for an invalid port
+    except ValueError:
+        return False
+    return parsed.scheme in ("ws", "wss") and bool(parsed.hostname)
+
+
 class SettingsOptionsFlow(OptionsFlow):
-    """The settings entry has no options."""
+    """Options of the settings entry: the Sendspin address override."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return self.async_abort(reason="no_options")
+        return await self.async_step_settings()
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Optionally set the Sendspin URL the app uses (wins over MA's address)."""
+        options = dict(self.config_entry.options)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = str(user_input.get(CONF_SENDSPIN_URL) or "").strip()
+            if url and not _valid_sendspin_url(url):
+                errors[CONF_SENDSPIN_URL] = "invalid_sendspin_url"
+            else:
+                if url:
+                    options[CONF_SENDSPIN_URL] = url
+                else:
+                    options.pop(CONF_SENDSPIN_URL, None)
+                return self.async_create_entry(data=options)
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=vol.Schema(
+                {
+                    _suggested(
+                        CONF_SENDSPIN_URL, options.get(CONF_SENDSPIN_URL)
+                    ): selector.TextSelector()
+                }
+            ),
+            errors=errors,
+        )
 
 
 class DeviceOptionsFlow(OptionsFlow):

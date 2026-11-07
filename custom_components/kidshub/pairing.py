@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+import hmac
 import secrets
 import time
 import uuid
@@ -27,17 +28,34 @@ class PendingPairing:
     aborted: bool = False
 
 
+@dataclass
+class _FreshPairing:
+    """A completed pairing whose device entry is not loaded yet."""
+
+    token_hash: str
+    expires_at: float
+    loaded: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 class PairingRegistry:
-    """Open pairings keyed by code."""
+    """Open pairings keyed by code, completed ones by device id.
+
+    A completed pairing keeps its token valid until the device entry is
+    loaded (``mark_loaded``) or ``PAIRING_TTL`` passed: the app connects right
+    after ``POST /api/kidshub/pair``, before the config flow created the entry.
+    """
 
     def __init__(self) -> None:
         self._pending: dict[str, PendingPairing] = {}
+        self._fresh: dict[str, _FreshPairing] = {}
         self._failures = 0
 
     def _purge(self) -> None:
         now = time.time()
         for code in [c for c, p in self._pending.items() if p.expires_at <= now]:
             del self._pending[code]
+        for dev in [d for d, f in self._fresh.items() if f.expires_at <= now]:
+            del self._fresh[dev]
 
     def start(self, child_name: str) -> PendingPairing:
         """Open a new pairing with a code unique among the open ones."""
@@ -68,8 +86,38 @@ class PairingRegistry:
         token = secrets.token_urlsafe(32)
         pending.token_hash = hashlib.sha256(token.encode()).hexdigest()
         pending.app_version = app_version
+        self._fresh[pending.device_id] = _FreshPairing(
+            token_hash=pending.token_hash, expires_at=time.time() + PAIRING_TTL
+        )
         pending.done.set()
         return pending, token
+
+    def fresh_token_valid(self, device_id: str, token: str) -> bool:
+        """Return whether ``token`` was just issued for the not yet loaded ``device_id``."""
+        self._purge()
+        fresh = self._fresh.get(device_id)
+        if fresh is None:
+            return False
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        return hmac.compare_digest(digest, fresh.token_hash)
+
+    async def wait_loaded(self, device_id: str, timeout: float) -> bool:
+        """Wait up to ``timeout`` seconds for the entry of ``device_id`` to load."""
+        fresh = self._fresh.get(device_id)
+        if fresh is None:
+            return False
+        try:
+            async with asyncio.timeout(timeout):
+                await fresh.loaded.wait()
+        except TimeoutError:
+            return False
+        return True
+
+    def mark_loaded(self, device_id: str) -> None:
+        """The device entry is loaded: its token is checked against the entry now."""
+        fresh = self._fresh.pop(device_id, None)
+        if fresh is not None:
+            fresh.loaded.set()
 
     def register_failure(self) -> None:
         """Count a failed attempt; too many invalidate all open pairings."""

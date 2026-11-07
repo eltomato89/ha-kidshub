@@ -295,12 +295,15 @@ async def test_stop_button_sets_button_required(
     await ws.close()
 
 
-async def test_settings_entry_has_no_options(hass: HomeAssistant) -> None:
+async def test_settings_entry_options_are_the_sendspin_override(
+    hass: HomeAssistant,
+) -> None:
     entry = MockConfigEntry(domain=DOMAIN, data={"entry_type": "settings"})
     entry.add_to_hass(hass)
     assert await async_setup_component(hass, DOMAIN, {})
     flow = await hass.config_entries.options.async_init(entry.entry_id)
-    assert flow["type"] is FlowResultType.ABORT
+    assert flow["type"] is FlowResultType.FORM
+    assert flow["step_id"] == "settings"
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])

@@ -18,6 +18,7 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_DEVICE,
+    ENTRY_TYPE_SETTINGS,
     PLATFORMS,
 )
 from .content import ContentService, ImageRegistry
@@ -91,6 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device = KidDevice(hass, entry)
         await device.async_load()
         data.devices[entry.data[CONF_DEVICE_ID]] = device
+        data.pairing.mark_loaded(device.device_id)
         _track_sw_version(hass, entry, device)
         assert data.ma is not None
         device.content = ContentService(device, data.ma, data.images)
@@ -107,7 +109,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(extras.stop)
         entry.async_on_unload(entry.add_update_listener(_async_options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    elif entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_SETTINGS:
+        entry.async_on_unload(entry.add_update_listener(_async_settings_updated))
     return True
+
+
+async def _async_settings_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Push the config to all devices (the Sendspin override may have changed)."""
+    for device in list(hass.data[DOMAIN].devices.values()):
+        await device.push_config()
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:

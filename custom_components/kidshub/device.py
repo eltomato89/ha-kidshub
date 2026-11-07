@@ -175,10 +175,18 @@ class KidDevice:
             sendspin=sendspin,
         )
 
+    async def async_config_message(self) -> dict[str, Any]:
+        """Look up a fallback Sendspin address if needed, then build ``config``."""
+        ma = getattr(self.hass.data.get(DOMAIN), "ma", None)
+        if ma is not None:
+            await ma.async_refresh_sendspin()
+        return self.config_message()
+
     async def push_config(self) -> None:
         """Bump the config version and push the new config."""
         self.config_version += 1
-        await self.push(self.config_message())
+        if self.connected:
+            await self.push(await self.async_config_message())
 
     async def update_settings(self, patch: dict[str, Any]) -> None:
         """Merge ``patch`` into the settings, notify and push the config."""

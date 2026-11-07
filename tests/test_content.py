@@ -473,6 +473,7 @@ async def test_browse_ma_stall_gives_ma_unavailable(
 
     mass = _fake_client()
     mass.music.get_library_playlists = never
+    mass.server_info = SimpleNamespace(base_url="http://192.168.1.10:8095")
     ma_entry = MockConfigEntry(
         domain="music_assistant",
         data={"url": "http://192.168.1.10:8095"},

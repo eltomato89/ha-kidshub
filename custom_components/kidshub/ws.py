@@ -26,6 +26,7 @@ from .device import (
 _LOGGER = logging.getLogger(__name__)
 
 AUTH_TIMEOUT = 10.0
+PAIRING_HOLD = 10.0  # seconds to wait for the entry of a just paired device
 HEARTBEAT = 30
 MAX_MSG_SIZE = 64 * 1024
 
@@ -131,6 +132,8 @@ class WsSession:
             return None
         device = self._devices.get(device_id)
         if device is None:
+            device = await self._await_fresh_pairing(device_id, token)
+        if device is None:
             # Protocol 3.1: auth_invalid makes the app give up for good, so
             # only send it when the device is really unknown or the token is
             # wrong; a known but unloaded device just gets the socket closed.
@@ -141,6 +144,23 @@ class WsSession:
             raise _AuthInvalid
         version = msg.get("app_version")
         device.app_version = version if isinstance(version, str) else None
+        return device
+
+    async def _await_fresh_pairing(self, device_id: str, token: str) -> KidDevice | None:
+        """Hold a just paired device until its entry loads (``None`` if not paired now).
+
+        Live race: HA answers ``POST /api/kidshub/pair`` before the config flow
+        has created and loaded the entry, and the app connects at once. Its
+        token must not be answered with ``auth_invalid`` (the app would unpair).
+        """
+        data = self._hass.data.get(DOMAIN)
+        pairing = getattr(data, "pairing", None)
+        if pairing is None or not pairing.fresh_token_valid(device_id, token):
+            return None
+        await pairing.wait_loaded(device_id, PAIRING_HOLD)
+        device = self._devices.get(device_id)
+        if device is None:
+            raise _NotLoaded  # still being created: close, the app retries
         return device
 
     async def run(self) -> None:
@@ -164,7 +184,7 @@ class WsSession:
             await device.attach(self)
             if self._devices.get(device.device_id) is not device:
                 return  # entry unloaded meanwhile
-            await self.send_json(device.config_message())
+            await self.send_json(await device.async_config_message())
             await device.on_connected()
             await self._loop(device)
         finally:

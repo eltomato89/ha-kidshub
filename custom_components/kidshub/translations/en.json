@@ -200,13 +200,18 @@
           "audiobooks": "Albums and audiobooks",
           "podcasts": "Podcasts"
         }
+      },
+      "settings": {
+        "title": "Settings",
+        "description": "Optional: the Sendspin address the app uses for audio, e.g. ws://192.168.1.10:8927/sendspin. Leave empty to use the address Music Assistant reports.",
+        "data": {
+          "sendspin_url": "Sendspin URL"
+        }
       }
     },
-    "abort": {
-      "no_options": "This entry has no options."
-    },
     "error": {
-      "ma_unavailable": "Music Assistant is not available. Please check the Music Assistant integration and try again."
+      "ma_unavailable": "Music Assistant is not available. Please check the Music Assistant integration and try again.",
+      "invalid_sendspin_url": "Please enter a ws:// or wss:// URL with a host, e.g. ws://192.168.1.10:8927/sendspin."
     }
   }
 }

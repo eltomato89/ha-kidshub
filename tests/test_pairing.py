@@ -119,3 +119,38 @@ async def test_no_pending_no_counting() -> None:
         assert await reg.complete("000000", "1") is None
     pending = reg.start("A")
     assert await reg.complete(pending.code, "1") is not None
+
+
+async def test_completed_pairing_token_valid_until_loaded() -> None:
+    """The just-issued token counts until the device entry is loaded."""
+    reg = PairingRegistry()
+    pending = reg.start("Paul")
+    _, token = await reg.complete(pending.code, "1")
+    assert reg.fresh_token_valid(pending.device_id, token)
+    assert not reg.fresh_token_valid(pending.device_id, "nope")
+    assert not reg.fresh_token_valid("other", token)
+    reg.mark_loaded(pending.device_id)
+    assert not reg.fresh_token_valid(pending.device_id, token)
+
+
+async def test_completed_pairing_expires(freezer) -> None:
+    reg = PairingRegistry()
+    pending = reg.start("Paul")
+    _, token = await reg.complete(pending.code, "1")
+    freezer.tick(timedelta(seconds=601))
+    assert not reg.fresh_token_valid(pending.device_id, token)
+
+
+async def test_wait_loaded() -> None:
+    import asyncio
+
+    reg = PairingRegistry()
+    pending = reg.start("Paul")
+    await reg.complete(pending.code, "1")
+    assert await reg.wait_loaded(pending.device_id, 0.01) is False
+    waiter = asyncio.ensure_future(reg.wait_loaded(pending.device_id, 2))
+    await asyncio.sleep(0)
+    reg.mark_loaded(pending.device_id)
+    assert await waiter is True
+    # unknown device: nothing to wait for
+    assert await reg.wait_loaded("ghost", 2) is False
