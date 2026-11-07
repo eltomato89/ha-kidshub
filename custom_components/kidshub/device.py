@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -30,6 +30,17 @@ Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 TTS_MAX_CHARS = 200
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ALARM_KEYS = {"enabled", "time", "weekdays", "with_light"}
+
+
+def tts_text(text: object) -> str | None:
+    """Return what a speak button sends for ``text`` (``text[:200]``), None if blank.
+
+    The app truncates a title to 200 characters before its ``tts`` request; the
+    pre-warming uses the same normalisation so the cache keys match.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text[:TTS_MAX_CHARS]
 
 
 class PushConfig(dict):  # type: ignore[type-arg]
@@ -180,7 +191,9 @@ class KidDevice:
         ma = getattr(self.hass.data.get(DOMAIN), "ma", None)
         if ma is not None:
             await ma.async_refresh_sendspin()
-        return self.config_message()
+        config = self.config_message()
+        self.prewarm_tts(r.get("name") for r in config.get("room") or [])
+        return config
 
     async def push_config(self) -> None:
         """Bump the config version and push the new config."""
@@ -196,6 +209,12 @@ class KidDevice:
     async def _apply_settings(self, patch: dict[str, Any]) -> None:
         await self.store.async_update_settings(copy.deepcopy(patch))
         self._notify()
+
+    def prewarm_tts(self, texts: Iterable[object]) -> None:
+        """Generate speech for ``texts`` in the background (never blocks or raises)."""
+        prewarm = getattr(self.hass.data.get(DOMAIN), "prewarm", None)
+        if prewarm is not None:
+            prewarm.schedule(texts)
 
     def register_handler(self, type_: str, handler: Handler) -> None:
         """Register the handler of an app request type."""
@@ -239,7 +258,8 @@ class KidDevice:
 
     async def _handle_tts(self, msg: dict[str, Any]) -> dict[str, Any]:
         text = msg.get("text")
-        if not isinstance(text, str) or not text.strip() or len(text) > TTS_MAX_CHARS:
+        say = tts_text(text)
+        if say is None or say != text:
             raise InvalidRequest("text must be 1..200 characters")
-        url = await self.hass.data[DOMAIN].tts.get_url(text)
+        url = await self.hass.data[DOMAIN].tts.get_url(say)
         return {"url": url}

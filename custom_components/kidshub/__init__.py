@@ -27,7 +27,7 @@ from .ma import MaAdapter
 from .pairing import PairingRegistry
 from .playback import PlaybackService
 from .room_bridge import RoomBridge
-from .tts_cache import TtsCache
+from .tts_cache import TtsCache, TtsPrewarmer
 from .views import ImageView, PairView, TtsView, WsView
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -43,6 +43,7 @@ class KidsHubData:
     ma: MaAdapter | None = None  # set in async_setup; tests inject a fake
     images: ImageRegistry = field(default_factory=ImageRegistry)  # emitted image URLs
     tts: TtsCache | None = None  # created in async_setup (needs hass)
+    prewarm: TtsPrewarmer | None = None  # background TTS generation of titles
     extras: dict[str, AlarmExtras] = field(default_factory=dict)  # entry_id ->
 
 
@@ -63,6 +64,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     data = async_get_data(hass)
     if data.tts is None:
         data.tts = TtsCache(hass)
+    if data.prewarm is None:
+        data.prewarm = TtsPrewarmer(hass, data.tts)
     if data.ma is None:
         data.ma = MaAdapter(hass)
     return True
@@ -143,4 +146,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device = hass.data[DOMAIN].devices.pop(entry.data[CONF_DEVICE_ID], None)
         if device is not None:
             await device.async_close()
+        if not hass.data[DOMAIN].devices and hass.data[DOMAIN].prewarm is not None:
+            hass.data[DOMAIN].prewarm.cancel()
     return unloaded

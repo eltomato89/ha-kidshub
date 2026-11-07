@@ -8,7 +8,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, quote, urlparse
 
-from .device import InvalidRequest, KidDevice, NotAllowed
+from .device import Handler, InvalidRequest, KidDevice, NotAllowed
 from .sorting import sort_episodes, sort_tracks
 
 if TYPE_CHECKING:
@@ -89,8 +89,8 @@ class ContentService:
         # it can be rated even when it is not part of an allowed container.
         self.now_playing: MaItem | None = None
         self._children: dict[str, tuple[float, list[MaItem]]] = {}
-        device.register_handler("browse", self._handle_browse)
-        device.register_handler("favorites", self._handle_favorites)
+        device.register_handler("browse", self._prewarming(self._handle_browse))
+        device.register_handler("favorites", self._prewarming(self._handle_favorites))
         device.register_handler("rate", self._handle_rate)
 
     # -- allowlist --------------------------------------------------------
@@ -224,6 +224,16 @@ class ContentService:
         return items
 
     # -- handlers ---------------------------------------------------------
+
+    def _prewarming(self, handler: Handler) -> Handler:
+        """Wrap ``handler`` to pre-warm the speech of every item title it returns."""
+
+        async def wrapped(msg: dict[str, Any]) -> dict[str, Any]:
+            result = await handler(msg)
+            self.device.prewarm_tts(i.get("title") for i in result.get("items") or [])
+            return result
+
+        return wrapped
 
     async def _handle_browse(self, msg: dict[str, Any]) -> dict[str, Any]:
         section = msg.get("section")
