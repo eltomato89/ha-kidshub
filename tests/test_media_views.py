@@ -252,7 +252,7 @@ async def test_image_redirect_to_public_host(
 @pytest.mark.parametrize(
     "address",
     ["127.0.0.1", "10.1.2.3", "192.168.1.20", "169.254.169.254", "::1", "0.0.0.0",
-     "224.0.0.1", "::ffff:10.0.0.1"],
+     "224.0.0.1", "::ffff:10.0.0.1", "100.64.0.1"],
 )
 async def test_image_redirect_to_private_rejected(
     hass: HomeAssistant, hass_client_no_auth, source, other, monkeypatch, address
@@ -313,6 +313,16 @@ async def test_image_relative_redirect_same_host(
     resp = await _img(hass_client_no_auth, url)
     assert resp.status == 200
     assert hosts == []  # same host:port as the registered URL: not resolved
+
+
+async def test_image_malformed_port_is_502(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    data = await _setup(hass)
+    url = "http://127.0.0.1:99999/a.png"
+    data.images.add(url)
+    resp = await _img(hass_client_no_auth, url)
+    assert resp.status == 502
 
 
 async def test_image_private_registered_url_served(

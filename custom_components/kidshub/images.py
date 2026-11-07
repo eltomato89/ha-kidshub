@@ -79,14 +79,7 @@ def _is_public(address: str) -> bool:
     ip = ipaddress.ip_address(address.split("%", 1)[0])
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return not (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    return ip.is_global and not ip.is_multicast
 
 
 async def _resolve(hass: HomeAssistant, host: str, port: int) -> list[str]:
@@ -116,8 +109,8 @@ async def _check_hop(hass: HomeAssistant, url: str, original: tuple[str, int]) -
 async def _download(hass: HomeAssistant, url: str) -> bytes:
     """Fetch ``url``, following at most ``MAX_REDIRECTS`` checked redirects."""
     session = async_get_clientsession(hass)
-    original = _origin(url)
     try:
+        original = _origin(url)  # a malformed port raises ValueError
         async with asyncio.timeout(FETCH_TIMEOUT):
             for hop in range(MAX_REDIRECTS + 1):
                 if hop:
