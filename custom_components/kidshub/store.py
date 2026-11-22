@@ -114,6 +114,8 @@ class KidStore:
         self._ratings: dict[str, RatingRecord] = {}
         self._progress: dict[str, ProgressRecord] = {}
         self._album_context: dict[str, Any] | None = None
+        self._queue: list[dict[str, Any]] = []
+        self._queue_cleared_on: str | None = None
 
     async def async_load(self) -> None:
         """Load stored data, merging saved settings over the defaults."""
@@ -131,6 +133,15 @@ class KidStore:
             and all(isinstance(t, str) for t in ctx["tracks"])
         ):
             self._album_context = {"uri": ctx["uri"], "tracks": list(ctx["tracks"])}
+        queue = data.get("queue")
+        if isinstance(queue, list):
+            self._queue = [
+                copy.deepcopy(e)
+                for e in queue
+                if isinstance(e, dict) and isinstance(e.get("uri"), str)
+            ]
+        cleared = data.get("queue_cleared_on")
+        self._queue_cleared_on = cleared if isinstance(cleared, str) else None
 
     def _data_to_save(self) -> dict[str, Any]:
         return {
@@ -138,6 +149,8 @@ class KidStore:
             "ratings": {u: asdict(r) for u, r in self._ratings.items()},
             "progress": {u: asdict(p) for u, p in self._progress.items()},
             "album_context": self._album_context,
+            "queue": self._queue,
+            "queue_cleared_on": self._queue_cleared_on,
         }
 
     def _schedule_save(self) -> None:
@@ -226,4 +239,26 @@ class KidStore:
         new = {"uri": uri, "tracks": list(tracks)} if uri else None
         if new != self._album_context:
             self._album_context = new
+            self._schedule_save()
+
+    @property
+    def queue(self) -> list[dict[str, Any]]:
+        """Return a copy of the waiting queue entries (oldest first)."""
+        return copy.deepcopy(self._queue)
+
+    def set_queue(self, entries: list[dict[str, Any]]) -> None:
+        """Replace the waiting queue entries."""
+        if entries != self._queue:
+            self._queue = copy.deepcopy(entries)
+            self._schedule_save()
+
+    @property
+    def queue_cleared_on(self) -> str | None:
+        """Return the ISO date the queue was last cleared in the morning."""
+        return self._queue_cleared_on
+
+    def set_queue_cleared_on(self, day: str) -> None:
+        """Remember the ISO date of the morning clear."""
+        if day != self._queue_cleared_on:
+            self._queue_cleared_on = day
             self._schedule_save()

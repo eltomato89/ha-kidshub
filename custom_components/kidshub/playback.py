@@ -145,11 +145,25 @@ class PlaybackService:
         self._last_push = float("-inf")
         self._last_save = float("-inf")
         self._music_enabled: bool = device.store.settings["music_enabled"]
+        # Queue auto-advance (protocol 3.5): only a queue the child started that
+        # ends by itself; not after wake_play, the music lock or a pause.
+        self._ended = False  # the MA queue played to its end
+        self._child_play = False  # the MA queue was started by play / the queue
+        self._paused = False  # paused by ``control`` (also the app's sleep timer)
+        # After KidsHub started a new MA queue, an ``ended`` from the old queue is
+        # stale until MA reports the new one as not ended.
+        self._await_fresh = False
+        self.on_natural_end: Callable[[], None] | None = None
         device.register_handler("play", self._handle_play)
         device.register_handler("control", self._handle_control)
         device.register_handler("wake_play", self._handle_wake_play)
         device.register_handler("set_wake_music", self._handle_set_wake_music)
         device.register_connected_callback(self._on_connected)
+
+    @property
+    def idle(self) -> bool:
+        """Return whether nothing is playing or paused (no item, or the queue ended)."""
+        return self._current is None or self._ended
 
     @property
     def content(self) -> ContentService:
@@ -296,7 +310,13 @@ class PlaybackService:
             seek_ms = FROM_START_SEEK_MS
         queue.extend(i.uri for i in rest)
         await self._play(queue, index, album, seek_ms)
+        self._child_play, self._paused = True, False
+        self._ended, self._await_fresh = False, True
         return {}
+
+    async def play_queued(self, uri: str) -> None:
+        """Play a queue entry like ``play`` with ``resume`` (allowlist and lock apply)."""
+        await self._handle_play({"uris": [uri], "resume": True})
 
     def _resume_point(
         self, item: MaItem, resume: bool, from_start: bool, tracks: int
@@ -395,6 +415,7 @@ class PlaybackService:
         except MaUnavailable:
             self._request_resubscribe()
             raise
+        self._paused = cmd == "pause"
         return {}
 
     async def _handle_wake_play(self, msg: dict[str, Any]) -> dict[str, Any]:
@@ -407,10 +428,12 @@ class PlaybackService:
                     if _media_type(uri) in WAKE_FROM_START_TYPES
                     else 0
                 )
+                self._child_play = False  # the wake-up music never advances the queue
                 await self._play([uri], 0, None, seek_ms)
         except TimeoutError as err:
             self._request_resubscribe()
             raise MaUnavailable("Music Assistant did not start in time") from err
+        self._ended, self._await_fresh = False, True
         return {}
 
     async def _wake_uri(self) -> str:
@@ -514,6 +537,10 @@ class PlaybackService:
     def _on_snapshot(self, snap: QueueSnapshot) -> None:
         """Handle a queue change of the device's player."""
         now = monotonic()
+        if not snap.ended:
+            self._await_fresh = False
+        ended = snap.ended and not self._await_fresh
+        was_ended, self._ended = self._ended, ended
         prev = self._current
         cur = self._describe(snap)
         item_changed = (prev is None) != (cur is None) or (
@@ -548,6 +575,16 @@ class PlaybackService:
                 self.device.push(self._now_playing_message()),
                 f"kidshub now_playing {self.device.device_id}",
             )
+        if ended and not was_ended:
+            self._on_ended()
+
+    def _on_ended(self) -> None:
+        """The MA queue ended by itself: let the KidsHub queue start its next entry."""
+        if not self._child_play or self._paused:
+            return
+        self._child_play = False
+        if self.on_natural_end is not None:
+            self.on_natural_end()
 
     def _save(self, cur: _Current, *, advanced: bool = False) -> None:
         """Save the resume position of ``cur`` (no-op for music tracks)."""
@@ -607,6 +644,7 @@ class PlaybackService:
 
     async def _stop_music(self) -> None:
         """Stop the music and clear the queue so it cannot be resumed."""
+        self._child_play = False
         try:
             player_id = await self._player()
             await self.ma.command(player_id, "stop")

@@ -25,6 +25,7 @@ from .content import ContentService, ImageRegistry
 from .device import KidDevice
 from .ma import MaAdapter
 from .pairing import PairingRegistry
+from .play_queue import QueueService
 from .playback import PlaybackService
 from .room_bridge import RoomBridge
 from .tts_cache import TtsCache, TtsPrewarmer
@@ -100,8 +101,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         assert data.ma is not None
         device.content = ContentService(device, data.ma, data.images)
         playback = PlaybackService(device, data.ma)
+        queue = QueueService(device, playback)  # its push follows now_playing
         playback.start(entry)
         entry.async_on_unload(playback.stop)
+        queue.start(entry)
+        entry.async_on_unload(queue.stop)
         bridge = RoomBridge(hass, device)
         bridge.start()
         entry.async_on_unload(bridge.stop)

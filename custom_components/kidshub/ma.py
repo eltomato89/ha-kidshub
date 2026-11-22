@@ -114,6 +114,7 @@ _LIBRARY_FETCH = {
 
 
 _CONTAINER_MEDIA_TYPES = {"album", "playlist", "podcast", "audiobook"}
+END_MARGIN_S = 5.0  # an idle queue this close to the end of its last item has ended
 
 
 def _base_url(mass: Any) -> str | None:
@@ -179,6 +180,27 @@ class QueueSnapshot:
     index: int
     elapsed_ms: int
     playing: bool
+    # the queue played to its end by itself (not stopped, paused or cleared)
+    ended: bool = False
+
+
+def _queue_ended(queue: Any, elapsed_s: float) -> bool:
+    """Return whether an MA queue played all the way to its end.
+
+    MA >= 2.11 models carry ``PlayerQueue.ended``. Older models lack it; then an
+    idle queue on its last item that reached the end of that item counts.
+    """
+    ended = getattr(queue, "ended", None)
+    if isinstance(ended, bool):
+        return ended
+    if queue.state != PlaybackState.IDLE or queue.current_item is None:
+        return False
+    items = getattr(queue, "items", None)
+    index = queue.current_index
+    if not isinstance(items, int) or index is None or index < items - 1:
+        return False
+    duration = getattr(queue.current_item, "duration", None) or 0
+    return duration > 0 and elapsed_s >= duration - END_MARGIN_S
 
 
 def parse_uri(uri: str) -> tuple[str, str, str]:
@@ -626,4 +648,5 @@ class MaAdapter:
             index=queue.current_index or 0,
             elapsed_ms=int(elapsed * 1000),
             playing=playing,
+            ended=_queue_ended(queue, elapsed),
         )

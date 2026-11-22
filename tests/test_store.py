@@ -85,6 +85,8 @@ async def test_persist_roundtrip(hass, hass_storage):
     await s.async_update_settings({"max_volume": 30})
     s.set_rating("a", "track", 5, "A", "sub", "img")
     s.set_progress("b", position_ms=1, duration_ms=2, finished=True)
+    s.set_queue([{"uri": "q1", "kind": "track", "title": "Q"}])
+    s.set_queue_cleared_on("2026-11-22")
     # Store debounces on loop time; advance it along with the wall clock.
     real_time = hass.loop.time
     with patch.object(hass.loop, "time", side_effect=lambda: real_time() + 10):
@@ -94,6 +96,8 @@ async def test_persist_roundtrip(hass, hass_storage):
     s2 = await _store(hass)
     assert s2.settings["max_volume"] == 30
     assert s2.get_rating("a") == 5
+    assert s2.queue == [{"uri": "q1", "kind": "track", "title": "Q"}]
+    assert s2.queue_cleared_on == "2026-11-22"
     assert s2.ratings("track")[0].image_url == "img"
     assert s2.get_progress("b").finished is True
 

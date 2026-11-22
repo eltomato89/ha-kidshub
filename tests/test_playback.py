@@ -96,6 +96,7 @@ async def _connect(client, connect_np=None):
     assert first["type"] == "now_playing"
     if connect_np is not None:
         connect_np.append(first)
+    assert (await ws.receive_json())["type"] == "queue"
     return ws
 
 
@@ -114,13 +115,16 @@ async def _next(ws, type_):
             return msg
 
 
-def _snap(current, *, elapsed_ms=0, index=0, playing=True, container=None):
+def _snap(
+    current, *, elapsed_ms=0, index=0, playing=True, container=None, ended=False
+):
     return QueueSnapshot(
         current=current,
         container_uri=container,
         index=index,
         elapsed_ms=elapsed_ms,
         playing=playing,
+        ended=ended,
     )
 
 

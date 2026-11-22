@@ -39,6 +39,7 @@ async def _connect(hass, hass_client_no_auth):
     assert (await ws.receive_json())["type"] == "auth_ok"
     assert (await ws.receive_json())["type"] == "config"
     assert (await ws.receive_json())["type"] == "now_playing"
+    assert (await ws.receive_json())["type"] == "queue"
     await hass.async_block_till_done()
     return ws
 

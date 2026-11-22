@@ -78,6 +78,7 @@ async def _connect(client):
     config = await ws.receive_json()
     assert config["type"] == "config"
     assert (await ws.receive_json())["type"] == "now_playing"
+    assert (await ws.receive_json())["type"] == "queue"
     return ws, config
 
 
