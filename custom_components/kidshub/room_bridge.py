@@ -114,9 +114,9 @@ class RoomBridge:
     def _toggle_service(
         self, entity_id: str, limit: int | None
     ) -> tuple[str, str, dict[str, Any]]:
-        """Toggle; switching on a limited light turns it on at its limit."""
+        """Toggle; switching on a limited light (any state but on) uses its limit."""
         state = self.hass.states.get(entity_id)
-        if limit is not None and state is not None and state.state == "off":
+        if limit is not None and (state is None or state.state != "on"):
             return ("light", "turn_on", {"brightness": limit})
         return ("homeassistant", "toggle", {})
 

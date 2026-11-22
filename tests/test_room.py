@@ -403,3 +403,19 @@ def test_max_brightness_option() -> None:
     assert max_brightness(opts, "light.d") == 128
     assert max_brightness(opts, "switch.e") is None
     assert max_brightness({}, "light.d") is None
+
+
+@pytest.mark.parametrize("state", ["unavailable", "unknown", None])
+async def test_room_max_brightness_toggle_not_on(
+    hass: HomeAssistant, hass_client_no_auth, state
+) -> None:
+    if state is not None:
+        hass.states.async_set("light.decke", state)
+    await _setup(hass, LIMITED)
+    turn_on = async_mock_service(hass, "light", "turn_on")
+    toggle = async_mock_service(hass, "homeassistant", "toggle")
+    ws, _ = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, entity_id="light.decke", action="toggle"))["success"]
+    assert turn_on[0].data == {"entity_id": "light.decke", "brightness": 76}
+    assert toggle == []
+    await ws.close()
