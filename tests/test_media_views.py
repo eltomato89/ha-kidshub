@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.kidshub import images as images_module
 from custom_components.kidshub.const import DOMAIN
-from custom_components.kidshub.device import InvalidRequest, TtsFailed
+from custom_components.kidshub.device import InvalidRequest, NotAllowed, TtsFailed
 
 TOKEN = "tok-a"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -527,6 +527,16 @@ async def test_tts_invalid_text(hass: HomeAssistant, text) -> None:
     data = await _setup(hass)
     with pytest.raises(InvalidRequest):
         await _tts(data.devices["dev-a"], text)
+
+
+async def test_tts_not_allowed_when_speak_disabled(hass: HomeAssistant) -> None:
+    data = await _setup(hass)
+    device = data.devices["dev-a"]
+    await device.update_settings({"speak_enabled": False})
+    calls, (p1, p2) = _patch_tts()
+    with p1, p2, pytest.raises(NotAllowed):
+        await _tts(device, "Hallo")
+    assert calls == []
 
 
 async def test_tts_error_code_over_ws(hass: HomeAssistant, hass_client_no_auth) -> None:

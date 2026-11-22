@@ -18,10 +18,12 @@ FLAGS: dict[str, tuple[str, ...]] = {
     "alarm_with_light": ("alarm", "with_light"),
     "music_enabled": ("music_enabled",),
     "settings_visible": ("settings_visible",),
+    "speak_enabled": ("speak_enabled",),
     "tile_music": ("tiles", "music"),
     "tile_audiobooks": ("tiles", "audiobooks"),
     "tile_podcasts": ("tiles", "podcasts"),
     "tile_radio": ("tiles", "radio"),
+    "tile_timer": ("tiles", "timer"),
 }
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 

@@ -56,6 +56,9 @@
       },
       "day_brightness": {
         "name": "Tag-Helligkeit"
+      },
+      "queue_max_length": {
+        "name": "Warteschlange max. Länge"
       }
     },
     "time": {
@@ -120,6 +123,12 @@
       },
       "alarm_sun": {
         "name": "Wecker Sonntag"
+      },
+      "speak_enabled": {
+        "name": "Vorlese-Knöpfe"
+      },
+      "tile_timer": {
+        "name": "Kachel Timer"
       }
     },
     "sensor": {

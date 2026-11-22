@@ -62,10 +62,12 @@ def test_build_config_room_and_keys():
     })
     assert set(cfg) == {
         "type", "version", "child_name", "tiles", "settings_visible", "music_enabled",
-        "max_volume", "alarm_max_volume", "alarm", "sleep_timer", "night",
+        "speak_enabled", "queue_max", "max_volume", "alarm_max_volume", "alarm", "sleep_timer", "night",
         "day_brightness", "sendspin", "room",
     }
     assert cfg["type"] == "config" and cfg["version"] == 3
+    assert cfg["speak_enabled"] is True and cfg["queue_max"] == 10
+    assert cfg["tiles"]["timer"] is True
     assert set(cfg["alarm"]) == {"enabled", "time", "weekdays", "lead_minutes",
                                  "with_light", "button_required"}
     assert cfg["alarm"]["button_required"] is True

@@ -263,6 +263,8 @@ class KidDevice:
         return PushConfig()
 
     async def _handle_tts(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if not self.store.settings["speak_enabled"]:
+            raise NotAllowed("speak buttons are disabled")
         text = msg.get("text")
         say = tts_text(text)
         if say is None or say != text:

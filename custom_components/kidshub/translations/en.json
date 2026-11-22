@@ -56,6 +56,9 @@
       },
       "day_brightness": {
         "name": "Day brightness"
+      },
+      "queue_max_length": {
+        "name": "Queue max length"
       }
     },
     "time": {
@@ -120,6 +123,12 @@
       },
       "alarm_sun": {
         "name": "Alarm Sunday"
+      },
+      "speak_enabled": {
+        "name": "Speak buttons"
+      },
+      "tile_timer": {
+        "name": "Timer tile"
       }
     },
     "sensor": {

@@ -61,6 +61,8 @@ def build_config(
         "tiles": tiles,
         "settings_visible": settings["settings_visible"],
         "music_enabled": settings["music_enabled"],
+        "speak_enabled": settings["speak_enabled"],
+        "queue_max": settings["queue"]["max_length"],
         "max_volume": settings["max_volume"],
         "alarm_max_volume": settings["alarm_max_volume"],
         "alarm": {

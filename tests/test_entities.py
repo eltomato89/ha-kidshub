@@ -229,3 +229,30 @@ async def test_sleep_remaining_whole_minutes(hass, hass_client_no_auth) -> None:
         await _wait_state(hass, alarm, alarm_state)
     assert changes == ["780", "0"]
     await ws.close()
+
+
+async def test_new_settings_entities(hass, hass_client_no_auth) -> None:
+    await _setup(hass)
+    ws = await _connect(hass, hass_client_no_auth)
+    device = hass.data[DOMAIN].devices["dev-a"]
+    speak = _entity_id(hass, "switch", "speak_enabled")
+    timer = _entity_id(hass, "switch", "tile_timer")
+    queue = _entity_id(hass, "number", "queue_max_length")
+    assert hass.states.get(speak).state == "on"
+    assert hass.states.get(timer).state == "on"
+    assert hass.states.get(queue).state == "10"
+    assert hass.states.get(queue).attributes.get("unit_of_measurement") is None
+    await hass.services.async_call("switch", "turn_off", {"entity_id": speak}, blocking=True)
+    config = await ws.receive_json()
+    assert config["type"] == "config" and config["speak_enabled"] is False
+    await hass.services.async_call("switch", "turn_off", {"entity_id": timer}, blocking=True)
+    config = await ws.receive_json()
+    assert config["tiles"]["timer"] is False
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": queue, "value": 25}, blocking=True
+    )
+    config = await ws.receive_json()
+    assert config["queue_max"] == 25
+    assert device.store.settings["queue"]["max_length"] == 25
+    assert device.store.settings["speak_enabled"] is False
+    await ws.close()

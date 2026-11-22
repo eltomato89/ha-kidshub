@@ -23,7 +23,12 @@ async def test_defaults(hass):
     assert st["max_volume"] == 60
     assert st["alarm"]["weekdays"] == [0, 1, 2, 3, 4]
     assert st["night"]["brightness"] == 5
-    assert st["tiles"] == {"music": True, "audiobooks": True, "podcasts": True, "radio": True}
+    assert st["tiles"] == {
+        "music": True, "audiobooks": True, "podcasts": True, "radio": True, "timer": True,
+    }
+    assert st["speak_enabled"] is True
+    assert st["queue"] == {"max_length": 10}
+    assert st["alarm"]["wake_music"] is None
     assert "sendspin" not in st and "room" not in st
     assert "button_required" not in st["alarm"]
     st["alarm"]["weekdays"].append(5)
@@ -146,4 +151,9 @@ async def test_stored_tiles_gain_radio_default(hass, hass_storage):
     await store.async_load()
     assert store.settings["tiles"] == {
         "music": True, "audiobooks": False, "podcasts": True, "radio": True,
+        "timer": True,
     }
+    # settings saved before 0.1.6 gain the new defaults
+    assert store.settings["speak_enabled"] is True
+    assert store.settings["queue"]["max_length"] == 10
+    assert store.settings["alarm"]["wake_music"] is None

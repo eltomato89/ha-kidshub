@@ -25,13 +25,22 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "weekdays": [0, 1, 2, 3, 4],
         "lead_minutes": 15,
         "with_light": False,
+        "wake_music": None,  # the child's own wake-up music (set_wake_music)
     },
     "sleep_timer": {"window_start": "19:00", "window_end": "06:00", "minutes": 30},
     "night": {"start": "19:30", "end": "06:30", "brightness": 5},
     "day_brightness": 70,
     "music_enabled": True,
     "settings_visible": False,
-    "tiles": {"music": True, "audiobooks": True, "podcasts": True, "radio": True},
+    "speak_enabled": True,
+    "tiles": {
+        "music": True,
+        "audiobooks": True,
+        "podcasts": True,
+        "radio": True,
+        "timer": True,
+    },
+    "queue": {"max_length": 10},
 }
 
 

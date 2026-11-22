@@ -48,6 +48,7 @@ SPECS = (
     ),
     NumberSpec("night_brightness", ("night", "brightness"), 1, 100),
     NumberSpec("day_brightness", ("day_brightness",), 10, 100),
+    NumberSpec("queue_max_length", ("queue", "max_length"), 1, 50, 1, None),
 )
 
 
