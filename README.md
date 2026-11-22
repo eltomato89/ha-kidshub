@@ -29,6 +29,8 @@ Echo-Show-Kinderzentrale für Home Assistant. KidsHub ist eine Home-Assistant-In
      Radiosender aus Music Assistant. Radiosender müssen dafür in der MA-Bibliothek sein
      (MA: Suche → Radio → „Zur Bibliothek hinzufügen“). Radio zählt wie Musik: der Schalter
      „Musik erlaubt“ sperrt auch Radio.
+   - **Zimmer → Max. Helligkeit:** optional eine Höchsthelligkeit pro Lampe (leer/100 % = keine
+     Grenze). Regler, Farbe und Einschalten bleiben darunter.
    - **Wecker-Extras:** Wecklicht (folgt dem Sonnenaufgang), Stopp-Taste und Weckmusik.
 4. **Music Assistant:** In Music Assistant den **Sendspin**-Player-Provider aktivieren und dort
    **„Unverschlüsselte Verbindungen erlauben“** einschalten (die App verbindet sich per
@@ -36,6 +38,23 @@ Echo-Show-Kinderzentrale für Home Assistant. KidsHub ist eine Home-Assistant-In
    Änderungen am Music-Assistant-Eintrag werden automatisch an die App übertragen.
 
 Der Name „Paul“ ist nur ein Beispiel.
+
+## Funktionen ab 0.1.6
+
+- **Vorlese-Knöpfe** (Schalter): blendet alle 🔊-Knöpfe der App aus.
+- **Kachel Timer** (Schalter): Countdown und Stoppuhr in der App (nachts lautlos).
+- **Warteschlange:** Das Kind kann Lieder, Playlists, Hörspiele und Folgen „in die
+  Warteschlange“ legen. Endet die Wiedergabe von selbst, startet KidsHub den nächsten Eintrag
+  (nicht nach Wecker, Pause, Sleep-Timer oder Musik-Sperre). Die Liste gehört KidsHub (nicht
+  der Music-Assistant-Queue), wird jeden Morgen zum Ende der Nachtzeit geleert, die maximale
+  Länge stellt **Warteschlange max. Länge** ein.
+- **Weckmusik vom Kind:** Bei sichtbaren Einstellungen kann das Kind ein Lied oder eine
+  Playlist als Weckmusik wählen; sie hat Vorrang vor der Eltern-Weckmusik, solange sie
+  freigegeben ist. Sensor **Weckmusik**, Knopf **Weckmusik zurücksetzen**.
+- **Durchsagen:** `notify.send_message` an `notify.kidshub_<kind>_durchsage` oder die Aktion
+  `kidshub.announce` (mehrere Geräte, optional Lautstärke, höchstens die maximale Lautstärke)
+  liest einen Text (bis 500 Zeichen) auf dem Echo vor – auch nachts. Ist das Gerät nicht
+  verbunden, schlägt die Aktion mit einem Fehler fehl.
 
 ## Protokoll
 
