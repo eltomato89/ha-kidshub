@@ -169,6 +169,11 @@
       "reset_wake_music": {
         "name": "Reset wake music"
       }
+    },
+    "notify": {
+      "announcement": {
+        "name": "Announcement"
+      }
     }
   },
   "options": {
@@ -236,6 +241,39 @@
     "error": {
       "ma_unavailable": "Music Assistant is not available. Please check the Music Assistant integration and try again.",
       "invalid_sendspin_url": "Please enter a ws:// or wss:// URL with a host, e.g. ws://192.168.1.10:8927/sendspin."
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "Announce",
+      "description": "Speaks a message on KidsHub devices (also at night and with the speak buttons off).",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "Text to speak (1 to 500 characters)."
+        },
+        "volume": {
+          "name": "Volume",
+          "description": "Volume in percent; capped at the device's max volume. Empty: current volume."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "KidsHub {name} is not connected."
+    },
+    "tts_failed": {
+      "message": "The announcement could not be generated: {error}"
+    },
+    "invalid_message": {
+      "message": "The message must have 1 to {max} characters."
+    },
+    "no_target": {
+      "message": "No KidsHub device selected."
+    },
+    "unknown_target": {
+      "message": "{target} is not a KidsHub entity."
     }
   }
 }

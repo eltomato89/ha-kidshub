@@ -8,11 +8,13 @@ import hashlib
 import hmac
 import logging
 import re
+import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .config_builder import build_config
@@ -28,6 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 TTS_MAX_CHARS = 200
+ANNOUNCE_MAX_CHARS = 500  # announcements from HA may be longer than speak buttons
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ALARM_KEYS = {"enabled", "time", "weekdays", "with_light"}
 
@@ -261,6 +264,45 @@ class KidDevice:
         """Store the last ``state`` message of the app and notify entities."""
         self.last_state = msg
         self._notify()
+
+    async def announce(self, message: object, volume: int | None = None) -> None:
+        """Speak ``message`` on the device (protocol ``announce``).
+
+        Works regardless of ``speak_enabled`` and at night; ``volume`` is capped
+        at ``max_volume``. Raises ``HomeAssistantError`` while offline.
+        """
+        text = message.strip() if isinstance(message, str) else ""
+        if not text or len(text) > ANNOUNCE_MAX_CHARS:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_message",
+                translation_placeholders={"max": str(ANNOUNCE_MAX_CHARS)},
+            )
+        name = self.entry.data[CONF_CHILD_NAME]
+        if not self.connected:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="not_connected",
+                translation_placeholders={"name": name},
+            )
+        try:
+            url = await self.hass.data[DOMAIN].tts.get_url(text)
+        except TtsFailed as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="tts_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        msg: dict[str, Any] = {
+            "type": "announce",
+            "id": str(uuid.uuid4()),
+            "text": text,
+            "url": url,
+        }
+        if volume is not None:
+            cap = self.store.settings["max_volume"]
+            msg["volume"] = max(0, min(int(volume), cap))
+        await self.push(msg)
 
     async def _handle_alarm_update(self, msg: dict[str, Any]) -> dict[str, Any]:
         patch = _parse_alarm_patch(msg)

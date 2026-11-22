@@ -1,0 +1,23 @@
+announce:
+  target:
+    device:
+      integration: kidshub
+    entity:
+      integration: kidshub
+      domain: notify
+  fields:
+    message:
+      required: true
+      example: "Essen ist fertig!"
+      selector:
+        text:
+          multiline: true
+    volume:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider

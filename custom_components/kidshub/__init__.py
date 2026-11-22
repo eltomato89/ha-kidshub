@@ -28,6 +28,7 @@ from .pairing import PairingRegistry
 from .play_queue import QueueService
 from .playback import PlaybackService
 from .room_bridge import RoomBridge
+from .services import async_register_services
 from .tts_cache import TtsCache, TtsPrewarmer
 from .views import ImageView, PairView, TtsView, WsView
 
@@ -69,6 +70,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         data.prewarm = TtsPrewarmer(hass, data.tts)
     if data.ma is None:
         data.ma = MaAdapter(hass)
+    async_register_services(hass)
     return True
 
 

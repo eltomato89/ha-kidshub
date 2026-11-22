@@ -17,9 +17,14 @@ CONF_TTS_LANGUAGE = "tts_language"
 CONF_TTS_OPTIONS = "tts_options"
 CONF_TTS_PREWARM = "tts_prewarm"
 
+SERVICE_ANNOUNCE = "announce"
+ATTR_MESSAGE = "message"
+ATTR_VOLUME = "volume"
+
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.NOTIFY,
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.SWITCH,

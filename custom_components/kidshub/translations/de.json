@@ -169,6 +169,11 @@
       "reset_wake_music": {
         "name": "Weckmusik zurücksetzen"
       }
+    },
+    "notify": {
+      "announcement": {
+        "name": "Durchsage"
+      }
     }
   },
   "options": {
@@ -236,6 +241,39 @@
     "error": {
       "ma_unavailable": "Music Assistant ist nicht erreichbar. Bitte die Music-Assistant-Integration prüfen und erneut versuchen.",
       "invalid_sendspin_url": "Bitte eine ws://- oder wss://-URL mit Host eingeben, z. B. ws://192.168.1.10:8927/sendspin."
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "Durchsage",
+      "description": "Liest eine Nachricht auf KidsHub-Geräten vor (auch nachts und ohne Vorlese-Knöpfe).",
+      "fields": {
+        "message": {
+          "name": "Nachricht",
+          "description": "Vorzulesender Text (1 bis 500 Zeichen)."
+        },
+        "volume": {
+          "name": "Lautstärke",
+          "description": "Lautstärke in Prozent, höchstens die maximale Lautstärke des Geräts. Leer: aktuelle Lautstärke."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "KidsHub {name} ist nicht verbunden."
+    },
+    "tts_failed": {
+      "message": "Die Durchsage konnte nicht erzeugt werden: {error}"
+    },
+    "invalid_message": {
+      "message": "Die Nachricht muss 1 bis {max} Zeichen haben."
+    },
+    "no_target": {
+      "message": "Kein KidsHub-Gerät ausgewählt."
+    },
+    "unknown_target": {
+      "message": "{target} ist keine KidsHub-Entität."
     }
   }
 }
