@@ -50,6 +50,8 @@ RETRY_DELAY_RE = re.compile(
     re.IGNORECASE,
 )
 CACHE_DIR = "kidshub_tts"
+ANNOUNCE_SUFFIX = ".announce"  # marker next to an announcement's audio file
+ANNOUNCE_MAX_AGE = 7 * 86400  # seconds an unused announcement file is kept
 EXTENSIONS = ("mp3", "wav", "ogg", "flac")
 NAME_RE = re.compile(r"^[0-9a-f]{64}\.(mp3|wav|ogg|flac)$")
 CONTENT_TYPES = {
@@ -183,12 +185,33 @@ class TtsCache:
         if not task.cancelled():
             task.exception()
 
-    async def get_url(self, text: str) -> str:
-        """Return the proxy URL of the audio for ``text`` (generating it once)."""
+    async def get_url(self, text: str, *, announcement: bool = False) -> str:
+        """Return the proxy URL of the audio for ``text`` (generating it once).
+
+        ``announcement`` marks the file as an announcement: announcement files
+        not used for ``ANNOUNCE_MAX_AGE`` are deleted (titles stay cached).
+        """
         task = self._task(text)
         assert task is not None
         name = await asyncio.shield(task)
+        if announcement:
+            await self.hass.async_add_executor_job(self._mark_announcement, name)
         return f"/api/kidshub/tts/{name}"
+
+    def _mark_announcement(self, name: str) -> None:
+        """Touch the marker of ``name`` and delete stale announcement files."""
+        (self.directory / f".{name}{ANNOUNCE_SUFFIX}").touch()
+        cutoff = time.time() - ANNOUNCE_MAX_AGE
+        for marker in self.directory.glob(f".*{ANNOUNCE_SUFFIX}"):
+            try:
+                if marker.stat().st_mtime >= cutoff:
+                    continue
+                audio = marker.name[1 : -len(ANNOUNCE_SUFFIX)]
+                if NAME_RE.match(audio):
+                    (self.directory / audio).unlink(missing_ok=True)
+                marker.unlink(missing_ok=True)
+            except OSError as err:
+                _LOGGER.debug("Could not clean up %s: %s", marker, err)
 
     async def prewarm(self, text: str) -> None:
         """Generate the audio of ``text`` unless cached or already in flight."""

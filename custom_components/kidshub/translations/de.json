@@ -274,6 +274,9 @@
     },
     "unknown_target": {
       "message": "{target} ist keine KidsHub-Entität."
+    },
+    "app_too_old": {
+      "message": "Die KidsHub-App von {name} ist zu alt für Durchsagen ({version}, mind. {min} nötig)."
     }
   }
 }

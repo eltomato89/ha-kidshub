@@ -274,6 +274,9 @@
     },
     "unknown_target": {
       "message": "{target} is not a KidsHub entity."
+    },
+    "app_too_old": {
+      "message": "The KidsHub app of {name} is too old for announcements ({version}, at least {min} needed)."
     }
   }
 }

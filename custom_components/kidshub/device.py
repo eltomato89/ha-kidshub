@@ -31,6 +31,8 @@ Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 TTS_MAX_CHARS = 200
 ANNOUNCE_MAX_CHARS = 500  # announcements from HA may be longer than speak buttons
+ANNOUNCE_MIN_APP = (0, 1, 3)  # older apps drop the ``announce`` push silently
+_VERSION_RE = re.compile(r"^\s*v?(\d+)\.(\d+)(?:\.(\d+))?")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ALARM_KEYS = {"enabled", "time", "weekdays", "with_light"}
 
@@ -68,6 +70,15 @@ class TtsFailed(Exception):
 
 class InvalidRequest(Exception):
     """The request is malformed (code ``invalid``)."""
+
+
+def parse_version(value: object) -> tuple[int, int, int] | None:
+    """Return ``(major, minor, patch)`` of an app version, None if unknown."""
+    match = _VERSION_RE.match(value) if isinstance(value, str) else None
+    if match is None:
+        return None
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
 
 
 def signal_name(device_id: str) -> str:
@@ -285,8 +296,19 @@ class KidDevice:
                 translation_key="not_connected",
                 translation_placeholders={"name": name},
             )
+        version = parse_version(self.app_version)
+        if version is not None and version < ANNOUNCE_MIN_APP:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="app_too_old",
+                translation_placeholders={
+                    "name": name,
+                    "version": str(self.app_version),
+                    "min": ".".join(map(str, ANNOUNCE_MIN_APP)),
+                },
+            )
         try:
-            url = await self.hass.data[DOMAIN].tts.get_url(text)
+            url = await self.hass.data[DOMAIN].tts.get_url(text, announcement=True)
         except TtsFailed as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

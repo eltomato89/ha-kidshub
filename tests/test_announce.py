@@ -13,10 +13,10 @@ from custom_components.kidshub.const import DOMAIN
 from .test_media_views import TOKEN, _patch_tts, _setup
 
 
-async def _connect(client):
+async def _connect(client, app_version="0.1.3"):
     ws = await client.ws_connect("/api/kidshub/ws")
     await ws.send_json(
-        {"type": "auth", "device_id": "dev-a", "token": TOKEN, "app_version": "1"}
+        {"type": "auth", "device_id": "dev-a", "token": TOKEN, "app_version": app_version}
     )
     for expected in ("auth_ok", "config", "now_playing", "queue"):
         assert (await ws.receive_json())["type"] == expected
@@ -144,3 +144,56 @@ async def test_announce_invalid(hass: HomeAssistant) -> None:
             blocking=True,
         )
     assert err.value.translation_key == "unknown_target"
+
+
+@pytest.mark.parametrize(
+    ("version", "allowed"),
+    [("0.1.2", False), ("0.0.9", False), ("0.1.3", True), ("0.2", True),
+     ("1.0.0-debug", True), ("dev", True)],
+)
+async def test_announce_needs_app_0_1_3(
+    hass: HomeAssistant, hass_client_no_auth, version, allowed
+) -> None:
+    await _setup(hass)
+    ws = await _connect(await hass_client_no_auth(), version)
+    _, (p1, p2) = _patch_tts()
+    with p1, p2:
+        call = hass.services.async_call(
+            DOMAIN,
+            "announce",
+            {"device_id": _device_id(hass), "message": "Hallo"},
+            blocking=True,
+        )
+        if allowed:
+            await call
+            assert (await _next(ws, "announce"))["text"] == "Hallo"
+        else:
+            with pytest.raises(HomeAssistantError) as err:
+                await call
+            assert err.value.translation_key == "app_too_old"
+    await ws.close()
+
+
+async def test_old_announcement_files_are_deleted(hass: HomeAssistant) -> None:
+    import os
+    import time
+    from pathlib import Path
+
+    data = await _setup(hass)
+    cache = Path(hass.config.path("kidshub_tts"))
+    cache.mkdir(parents=True, exist_ok=True)
+    old, title = "a" * 64 + ".mp3", "b" * 64 + ".mp3"
+    for name in (old, title):
+        (cache / name).write_bytes(b"x")
+    marker = cache / f".{old}.announce"
+    marker.touch()
+    stale = time.time() - 8 * 86400
+    os.utime(marker, (stale, stale))
+    os.utime(cache / title, (stale, stale))  # a title (prewarm) file: kept
+    _, (p1, p2) = _patch_tts()
+    with p1, p2:
+        url = await data.tts.get_url("Neu", announcement=True)
+    name = url.rsplit("/", 1)[1]
+    assert not (cache / old).exists() and not marker.exists()
+    assert (cache / title).exists()
+    assert (cache / name).exists() and (cache / f".{name}.announce").exists()
