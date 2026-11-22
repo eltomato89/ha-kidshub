@@ -116,7 +116,14 @@ async def _next(ws, type_):
 
 
 def _snap(
-    current, *, elapsed_ms=0, index=0, playing=True, container=None, ended=False
+    current,
+    *,
+    elapsed_ms=0,
+    index=0,
+    playing=True,
+    container=None,
+    ended=False,
+    paused=False,
 ):
     return QueueSnapshot(
         current=current,
@@ -125,6 +132,7 @@ def _snap(
         elapsed_ms=elapsed_ms,
         playing=playing,
         ended=ended,
+        paused=paused,
     )
 
 

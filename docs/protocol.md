@@ -180,23 +180,23 @@ Alle Felder sind optional; ältere Gegenstellen ignorieren sie bzw. es gilt der 
 ```json
 {"type":"queue","items":[Item],"max":10}
 ```
-`items` sind die **noch wartenden** Einträge in Reihenfolge (der gerade laufende Eintrag ist nicht enthalten). Die Liste gehört der Integration (pro Kind gespeichert) und wird jeden Morgen um `night.end` geleert. Endet die aktuelle Wiedergabe von selbst (MA-Queue zu Ende), startet die Integration den ersten Eintrag wie ein `play` mit `resume:true` und entfernt ihn. Kein Weiterschalten nach `wake_play`, nach Stopp durch die Musik-Sperre, nach Pause/Sleep-Timer. Einträge, die inzwischen nicht mehr erlaubt sind (Allowlist, Musik-Sperre), werden übersprungen und entfernt. Ein `play` lässt die Warteschlange unverändert.
+`items` sind die **noch wartenden** Einträge in Reihenfolge (der gerade laufende Eintrag ist nicht enthalten). Jedes Item hat zusätzlich `"qid"` (string, eindeutig je Eintrag, stabil solange er wartet). Die Liste gehört der Integration (pro Kind gespeichert) und wird jeden Morgen um `night.end` geleert. Endet die aktuelle Wiedergabe von selbst (MA-Queue zu Ende), startet die Integration den ersten Eintrag wie ein `play` mit `resume:true` und entfernt ihn. Kein Weiterschalten nach `wake_play`, nach Stopp durch die Musik-Sperre, nach Pause/Sleep-Timer. Einträge, die inzwischen nicht mehr erlaubt sind (Allowlist, Musik-Sperre), werden übersprungen und entfernt. Ein `play` lässt die Warteschlange unverändert.
 
 **`announce`** (Server → App, Push): Durchsage aus HA.
 ```json
 {"type":"announce","id":"<uuid>","text":"Essen ist fertig!","url":"/api/kidshub/tts/<sha>.<ext>","volume":60}
 ```
-`volume` (0..100, wie `max_volume` in Prozent der Gerätelautstärke, **nicht** die logische `state.volume`) fehlt → aktuelle Lautstärke; die App kappt immer auf `max_volume` und stellt die vorherige Lautstärke nach der Durchsage wieder her. Eine Durchsage mit einer `url` außerhalb von `/api/kidshub/` wird verworfen. Die App spielt einen kurzen Gong, dann `url` (Musik wird wie bei TTS geduckt), weckt den Bildschirm und zeigt den Text an. Mehrere Durchsagen nacheinander; während der Wecker klingelt, wartet sie. Durchsagen gelten auch nachts und unabhängig von `speak_enabled`.
+`volume` (0..100, wie `max_volume` in Prozent der Gerätelautstärke, **nicht** die logische `state.volume`) fehlt → aktuelle Lautstärke; die App kappt immer auf `max_volume` und stellt die vorherige Lautstärke nach der Durchsage wieder her. Eine Durchsage mit einer `url` außerhalb von `/api/kidshub/` wird verworfen. Die App spielt einen kurzen Gong, dann `url` (Musik wird wie bei TTS geduckt), weckt den Bildschirm und zeigt den Text an. Mehrere Durchsagen nacheinander; während der Wecker klingelt, wartet sie. Durchsagen gelten auch nachts und unabhängig von `speak_enabled`. Die Integration schickt `announce` nur an Apps ≥ 0.1.3 (ältere ignorieren den Push) und meldet sonst einen Fehler.
 
 **Neue Requests (App → Server, mit `id`)**
 
 | type | Felder | Ergebnis |
 |---|---|---|
-| `queue_add` | `uri` | `{}` und neuer `queue`-Push. Erlaubte Arten: `track`, `playlist`, `album`, `audiobook`, `episode`, `album_track` (nicht `radio`, `favorites`). Nicht freigegeben → `not_allowed`; Musik bei `music_enabled:false` → `not_allowed`; Warteschlange voll → `invalid` mit `"message":"queue_full"`. Läuft gerade nichts (kein `now_playing` bzw. nicht `playing`/`paused`), startet der Eintrag sofort (wie `play`, `resume:true`) statt angehängt zu werden; Ergebnis dann `{"started":true}`. |
-| `queue_remove` | `index` (0-basiert in `queue.items`) | `{}` und neuer `queue`-Push; ungültiger Index → `invalid` |
+| `queue_add` | `uri` | `{}` und neuer `queue`-Push. Erlaubte Arten: `track`, `playlist`, `album`, `audiobook`, `episode`, `album_track` (nicht `radio`, `favorites`). Nicht freigegeben → `not_allowed`; Musik bei `music_enabled:false` → `not_allowed`; Warteschlange voll → `invalid` mit `"message":"queue_full"`. Läuft gerade nichts (MA-Player weder `playing` noch `paused`) oder kann die laufende Wiedergabe nicht von selbst enden (Radio, Weckmusik), startet die Warteschlange sofort: wartet schon etwas, spielt der erste wartende Eintrag und der neue wird angehängt, sonst spielt der neue Eintrag (wie `play`, `resume:true`); Ergebnis dann `{"started":true}`. |
+| `queue_remove` | `qid` (aus `queue.items[].qid`) | `{}` und neuer `queue`-Push; unbekannte `qid` (schon gespielt/entfernt) → ebenfalls `{}` (idempotent) |
 | `set_wake_music` | `uri` (string) oder `null` (= zurücksetzen) | `{}`, danach neues `config`. Nur wenn `settings_visible` true, sonst `not_allowed`. Erlaubt: `track` (auch Lieder **in** einer freigegebenen Playlist) und `playlist`; sonst `not_allowed`/`invalid`. |
 
-**`wake_play`** – Reihenfolge der Weckmusik: zuerst `alarm.wake_music` des Kindes (wenn noch erlaubt), dann die Eltern-Weckmusik (Option `wake_media_uri`), sonst Fehler → App spielt den Fallback-Ton. Eine Playlist startet beim ersten Titel, ein einzelner Titel wird einmal gespielt; Lautstärke-Rampe, Stopp und Auto-Off wie bisher.
+**`wake_play`** – Reihenfolge der Weckmusik: zuerst `alarm.wake_music` des Kindes (wenn noch erlaubt und `music_enabled`), dann die Eltern-Weckmusik (Option `wake_media_uri`), sonst Fehler → App spielt den Fallback-Ton. Eine Playlist startet beim ersten Titel, ein einzelner Titel wird einmal gespielt; Lautstärke-Rampe, Stopp und Auto-Off wie bisher.
 
 **Timer (nur App)**: Countdown und Stoppuhr laufen lokal. Läuft der Countdown während der Nachtzeit (`night.start`..`night.end`) ab, gibt es keinen Ton und das Display wird nicht geweckt; tagsüber klingelt ein sanfter Ton (≤ `max_volume`) bis Stopp, höchstens 60 s.
 

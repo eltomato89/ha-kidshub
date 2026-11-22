@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 import time
+import uuid
 from dataclasses import asdict, dataclass, fields
 from typing import Any, TypeVar
 
@@ -103,6 +104,17 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _with_qids(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return copies of queue entries, giving entries without one a unique ``qid``."""
+    result = []
+    for entry in entries:
+        entry = copy.deepcopy(entry)
+        if not isinstance(entry.get("qid"), str) or not entry["qid"]:
+            entry["qid"] = uuid.uuid4().hex
+        result.append(entry)
+    return result
+
+
 class KidStore:
     """Settings, ratings and progress of one KidsHub device entry."""
 
@@ -135,11 +147,9 @@ class KidStore:
             self._album_context = {"uri": ctx["uri"], "tracks": list(ctx["tracks"])}
         queue = data.get("queue")
         if isinstance(queue, list):
-            self._queue = [
-                copy.deepcopy(e)
-                for e in queue
-                if isinstance(e, dict) and isinstance(e.get("uri"), str)
-            ]
+            self._queue = _with_qids(
+                [e for e in queue if isinstance(e, dict) and isinstance(e.get("uri"), str)]
+            )
         cleared = data.get("queue_cleared_on")
         self._queue_cleared_on = cleared if isinstance(cleared, str) else None
 
@@ -248,8 +258,9 @@ class KidStore:
 
     def set_queue(self, entries: list[dict[str, Any]]) -> None:
         """Replace the waiting queue entries."""
+        entries = _with_qids(entries)
         if entries != self._queue:
-            self._queue = copy.deepcopy(entries)
+            self._queue = entries
             self._schedule_save()
 
     @property

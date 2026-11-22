@@ -96,7 +96,11 @@ async def test_persist_roundtrip(hass, hass_storage):
     s2 = await _store(hass)
     assert s2.settings["max_volume"] == 30
     assert s2.get_rating("a") == 5
-    assert s2.queue == [{"uri": "q1", "kind": "track", "title": "Q"}]
+    (entry,) = s2.queue
+    assert {k: v for k, v in entry.items() if k != "qid"} == {
+        "uri": "q1", "kind": "track", "title": "Q",
+    }
+    assert entry["qid"] == s.queue[0]["qid"]  # stable across a restart
     assert s2.queue_cleared_on == "2026-11-22"
     assert s2.ratings("track")[0].image_url == "img"
     assert s2.get_progress("b").finished is True

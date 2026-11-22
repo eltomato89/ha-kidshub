@@ -182,6 +182,7 @@ class QueueSnapshot:
     playing: bool
     # the queue played to its end by itself (not stopped, paused or cleared)
     ended: bool = False
+    paused: bool = False
 
 
 def _queue_ended(queue: Any, elapsed_s: float) -> bool:
@@ -649,4 +650,5 @@ class MaAdapter:
             elapsed_ms=int(elapsed * 1000),
             playing=playing,
             ended=_queue_ended(queue, elapsed),
+            paused=queue.state == PlaybackState.PAUSED,
         )

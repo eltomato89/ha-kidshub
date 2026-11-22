@@ -88,11 +88,16 @@ async def test_queue_add_remove_full(hass: HomeAssistant, hass_client_no_auth) -
     res = await _request(ws, 3, "queue_add", uri=BOOK.uri)
     assert res["error"]["code"] == "invalid"
     assert res["error"]["message"] == "queue_full"
-    for id_, index in ((4, 2), (5, -1), (6, "0"), (7, True)):
-        res = await _request(ws, id_, "queue_remove", index=index)
-        assert res["error"]["code"] == "invalid", index
-    res, (msg,) = await _req(ws, 8, "queue_remove", index=0)
+    qid = msg["items"][0]["qid"]
+    assert isinstance(qid, str) and qid != msg["items"][1]["qid"]
+    for id_, bad in ((4, None), (5, 0), (6, "")):
+        res = await _request(ws, id_, "queue_remove", qid=bad)
+        assert res["error"]["code"] == "invalid", bad
+    res, (msg,) = await _req(ws, 8, "queue_remove", qid=qid)
     assert res["success"] and _uris(msg) == [ALBUM.uri]
+    # idempotent: an unknown qid is no error and pushes the list again
+    res, (msg,) = await _req(ws, 9, "queue_remove", qid=qid)
+    assert res["result"] == {} and _uris(msg) == [ALBUM.uri]
     assert [e["uri"] for e in device.store.queue] == [ALBUM.uri]
     assert len(fake.play_calls) == 1  # only the initial play
     await ws.close()
@@ -359,6 +364,7 @@ async def test_queue_kept_before_night_end_at_startup(
         store_module.KidStore.async_load = real_load
     store = _device(hass).store
     assert [e["uri"] for e in store.queue] == [EP1.uri]
+    assert store.queue[0]["qid"]  # old entries get a qid
     assert store.queue_cleared_on == yesterday
 
 
@@ -383,3 +389,137 @@ def test_queue_ended_detection() -> None:
     assert _queue_ended(queue(current_index=1), 180) is False
     assert _queue_ended(queue(state=PlaybackState.PAUSED), 180) is False
     assert _queue_ended(queue(current_item=None), 180) is False
+
+
+# -- starting the queue when nothing will end by itself ----------------------
+
+
+async def _add(hass, uri):
+    return await _device(hass).handle_request({"type": "queue_add", "id": 1, "uri": uri})
+
+
+async def test_queue_add_starts_after_wake_music(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake, {**OPTIONS, "wake_media_uri": OPTIONS["playlists"][0]})
+    await _device(hass).handle_request({"type": "wake_play", "id": 0})
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=1000))
+    assert await _add(hass, EP1.uri) == {"started": True}
+    assert fake.play_calls[-1][1] == [EP1.uri]
+
+
+async def test_queue_add_starts_for_outside_or_radio(hass: HomeAssistant) -> None:
+    fake = _fake()
+    fake._library["radio"] = [RADIO]
+    await _setup(hass, fake, Q_OPTIONS)
+    # started outside KidsHub (or before an HA restart): no auto-advance
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=1000))
+    assert await _add(hass, EP1.uri) == {"started": True}
+    # radio never ends
+    await _playing(hass, fake, RADIO)
+    assert await _add(hass, EP2.uri) == {"started": True}
+    assert [c[1] for c in fake.play_calls] == [[EP1.uri], [RADIO.uri], [EP2.uri]]
+
+
+async def test_queue_add_starts_when_stopped_from_outside(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    await _playing(hass, fake)
+    # stopped in the MA UI: idle on the item, not ended
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=5000, playing=False))
+    assert await _add(hass, EP1.uri) == {"started": True}
+
+
+async def test_queue_add_waits_while_paused(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    await _playing(hass, fake)
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=5000, playing=False, paused=True))
+    assert await _add(hass, EP1.uri) == {}
+    assert len(fake.play_calls) == 1
+
+
+async def test_queue_add_plays_waiting_entry_first(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    device.store.set_queue([{"uri": EP1.uri, "kind": "episode", "title": "Folge 1"}])
+    assert await _add(hass, EP2.uri) == {"started": True}
+    assert fake.play_calls[-1][1] == [EP1.uri]
+    assert [e["uri"] for e in device.store.queue] == [EP2.uri]
+
+
+async def test_concurrent_queue_add_starts_once(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    results = await asyncio.gather(
+        device.handle_request({"type": "queue_add", "id": 1, "uri": EP1.uri}),
+        device.handle_request({"type": "queue_add", "id": 2, "uri": EP2.uri}),
+    )
+    assert sorted(map(str, results)) == ["{'started': True}", "{}"]
+    assert len(fake.play_calls) == 1
+    assert len(device.store.queue) == 1
+
+
+async def test_queue_add_during_play_is_appended(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    gate = asyncio.Event()
+    real_play = fake.play
+
+    async def slow_play(*args, **kwargs):
+        await gate.wait()
+        await real_play(*args, **kwargs)
+
+    fake.play = slow_play
+    play = hass.async_create_task(
+        device.handle_request({"type": "play", "id": 1, "uris": [TRACK_A.uri]})
+    )
+    await asyncio.sleep(0)
+    add = hass.async_create_task(_add(hass, EP1.uri))
+    await asyncio.sleep(0.05)
+    gate.set()
+    assert await play == {}
+    assert await add == {}
+    assert [c[1] for c in fake.play_calls] == [[TRACK_A.uri]]
+    assert [e["uri"] for e in device.store.queue] == [EP1.uri]
+
+
+async def test_external_resume_clears_pause(hass: HomeAssistant) -> None:
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    await _playing(hass, fake)
+    assert await _add(hass, EP1.uri) == {}
+    await device.handle_request({"type": "control", "id": 2, "cmd": "pause"})
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=5000, playing=False, paused=True))
+    # resumed in the MA UI, then it ends by itself
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=6000))
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=180000, playing=False, ended=True))
+    await hass.async_block_till_done()
+    assert fake.play_calls[-1][1] == [EP1.uri]
+
+
+async def test_unreported_start_counts_as_ended(hass: HomeAssistant) -> None:
+    """MA never reports a queued entry that failed: it is dropped after a timeout."""
+    from custom_components.kidshub.playback import FRESH_TIMEOUT
+
+    fake = _fake()
+    await _setup(hass, fake)
+    device = _device(hass)
+    await _playing(hass, fake)
+    assert await _add(hass, EP1.uri) == {}
+    assert await _add(hass, EP2.uri) == {}
+    fake.emit_queue(PLAYER, _snap(TRACK_A, elapsed_ms=180000, playing=False, ended=True))
+    await hass.async_block_till_done()
+    assert fake.play_calls[-1][1] == [EP1.uri]
+    # MA reports nothing for EP1 (it failed right away)
+    for step in (1, 2, 3):
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=step * (FRESH_TIMEOUT + 1))
+        )
+        await hass.async_block_till_done()
+    assert [c[1] for c in fake.play_calls[-2:]] == [[EP1.uri], [EP2.uri]]
+    assert device.store.queue == []
+    assert len(fake.play_calls) == 3  # each entry tried once, no loop

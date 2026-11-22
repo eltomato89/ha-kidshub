@@ -23,6 +23,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_call_later
 
 from .const import CONF_CHILD_NAME
 from .content import FAVORITES_PREFIX
@@ -46,6 +47,7 @@ WAKE_PLAY_TIMEOUT = 7.0  # the app falls back to its own alarm sound after 8 s
 PUSH_INTERVAL = 10.0  # seconds between now_playing pushes of the same item
 SAVE_INTERVAL = 10.0  # seconds between progress saves of the same item
 FINISHED_MARGIN_MS = 30000
+FRESH_TIMEOUT = 20.0  # seconds until a start MA never reported counts as ended
 RETRY_DELAYS = (1, 2, 5, 10, 30, 60)  # seconds, queue subscription backoff
 FROM_START_SEEK_MS = 1000  # MA treats seek 0 as "resume at MA's own position"
 FROM_START_KINDS = {"album", "episode", "audiobook"}
@@ -151,8 +153,11 @@ class PlaybackService:
         self._child_play = False  # the MA queue was started by play / the queue
         self._paused = False  # paused by ``control`` (also the app's sleep timer)
         # After KidsHub started a new MA queue, an ``ended`` from the old queue is
-        # stale until MA reports the new one as not ended.
+        # stale until MA reports the new one as playing/paused (or FRESH_TIMEOUT).
         self._await_fresh = False
+        self._unsub_fresh: Callable[[], None] | None = None
+        self._active = False  # MA reports the player as playing or paused
+        self._pending = 0  # play/wake_play requests that are starting playback
         self.on_natural_end: Callable[[], None] | None = None
         device.register_handler("play", self._handle_play)
         device.register_handler("control", self._handle_control)
@@ -162,8 +167,50 @@ class PlaybackService:
 
     @property
     def idle(self) -> bool:
-        """Return whether nothing is playing or paused (no item, or the queue ended)."""
-        return self._current is None or self._ended
+        """Return whether the MA player is neither playing nor paused.
+
+        Right after KidsHub started something the player counts as busy until MA
+        reported the new queue (or ``FRESH_TIMEOUT`` passed).
+        """
+        return not (self._pending or self._await_fresh or self._active)
+
+    @property
+    def advances_by_itself(self) -> bool:
+        """Return whether the current playback will start the queue when it ends.
+
+        Not for wake-up music, content started outside KidsHub or before an HA
+        restart, and radio (which never ends).
+        """
+        cur = self._current
+        return self._child_play and not (cur is not None and cur.kind == "radio")
+
+    def should_start_queue(self) -> bool:
+        """Return whether ``queue_add`` should start the queue instead of waiting."""
+        if self._pending:
+            return False  # a play is starting; the queue waits for its end
+        return self.idle or not self.advances_by_itself
+
+    def _started(self, *, child: bool) -> None:
+        """Record that KidsHub replaced the MA queue (``child``: play or the queue)."""
+        self._child_play = child
+        self._paused = False
+        self._ended, self._await_fresh = False, True
+        if self._unsub_fresh is not None:
+            self._unsub_fresh()
+        self._unsub_fresh = async_call_later(
+            self.hass, FRESH_TIMEOUT, self._on_fresh_timeout
+        )
+
+    @callback
+    def _on_fresh_timeout(self, _now: Any) -> None:
+        """MA never reported the new queue: if nothing plays, it has ended."""
+        self._unsub_fresh = None
+        if not self._await_fresh:
+            return
+        self._await_fresh = False
+        if not self._active and not self._ended:
+            self._ended = True
+            self._on_ended()
 
     @property
     def content(self) -> ContentService:
@@ -191,6 +238,9 @@ class PlaybackService:
 
     def stop(self) -> None:
         """Stop following the queue."""
+        if self._unsub_fresh is not None:
+            self._unsub_fresh()
+            self._unsub_fresh = None
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -269,6 +319,13 @@ class PlaybackService:
     # -- handlers -------------------------------------------------------------
 
     async def _handle_play(self, msg: dict[str, Any]) -> dict[str, Any]:
+        self._pending += 1
+        try:
+            return await self._start_play(msg)
+        finally:
+            self._pending -= 1
+
+    async def _start_play(self, msg: dict[str, Any]) -> dict[str, Any]:
         uris, start, resume, from_start = _parse_play(msg)
         groups = [await self._resolve_uri(uri) for uri in uris]
         if not groups[start]:
@@ -310,8 +367,7 @@ class PlaybackService:
             seek_ms = FROM_START_SEEK_MS
         queue.extend(i.uri for i in rest)
         await self._play(queue, index, album, seek_ms)
-        self._child_play, self._paused = True, False
-        self._ended, self._await_fresh = False, True
+        self._started(child=True)
         return {}
 
     async def play_queued(self, uri: str) -> None:
@@ -419,6 +475,13 @@ class PlaybackService:
         return {}
 
     async def _handle_wake_play(self, msg: dict[str, Any]) -> dict[str, Any]:
+        self._pending += 1
+        try:
+            return await self._start_wake_play()
+        finally:
+            self._pending -= 1
+
+    async def _start_wake_play(self) -> dict[str, Any]:
         try:
             async with asyncio.timeout(WAKE_PLAY_TIMEOUT):
                 uri = await self._wake_uri()
@@ -433,12 +496,15 @@ class PlaybackService:
         except TimeoutError as err:
             self._request_resubscribe()
             raise MaUnavailable("Music Assistant did not start in time") from err
-        self._ended, self._await_fresh = False, True
+        self._started(child=False)
         return {}
 
     async def _wake_uri(self) -> str:
         """Return the wake-up music: the child's choice if still allowed, else the parents'."""
-        chosen = self.device.store.settings["alarm"].get("wake_music")
+        settings = self.device.store.settings
+        chosen = settings["alarm"].get("wake_music")
+        if not settings["music_enabled"]:
+            chosen = None  # the music lock also applies to the child's choice
         if isinstance(chosen, dict) and isinstance(chosen.get("uri"), str):
             found = await self.content.find_allowed_item(chosen["uri"])
             if found is not None and found.kind in WAKE_MUSIC_KINDS:
@@ -537,8 +603,11 @@ class PlaybackService:
     def _on_snapshot(self, snap: QueueSnapshot) -> None:
         """Handle a queue change of the device's player."""
         now = monotonic()
-        if not snap.ended:
-            self._await_fresh = False
+        self._active = snap.playing or snap.paused
+        if self._active:
+            self._await_fresh = False  # MA reports the new queue
+        if snap.playing:
+            self._paused = False  # resumed (also from outside KidsHub)
         ended = snap.ended and not self._await_fresh
         was_ended, self._ended = self._ended, ended
         prev = self._current

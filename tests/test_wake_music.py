@@ -142,3 +142,18 @@ async def test_reset_wake_music_button(hass: HomeAssistant, hass_client_no_auth)
     assert sensor.state == "unknown"
     assert sensor.attributes["uri"] is None
     await ws.close()
+
+
+async def test_music_lock_skips_childs_wake_music(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    fake = _wake_fake()
+    await _setup(hass, fake, WAKE_OPTIONS)
+    await _visible(hass)
+    ws = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, "set_wake_music", uri=TRACK_C.uri))["success"]
+    await _device(hass).update_settings({"music_enabled": False})
+    res = await _request(ws, 2, "wake_play")
+    assert res["success"] is True, res
+    assert fake.play_calls[-1] == (PLAYER, [PL1.uri], 0, 0)  # the parents' choice
+    await ws.close()

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from datetime import datetime, time as dt_time
 from typing import TYPE_CHECKING, Any
@@ -60,6 +61,7 @@ def _entry(it: MaItem) -> dict[str, Any]:
         "image": it.image,
         "duration_ms": it.duration_ms,
         "added": time.time(),
+        "qid": uuid.uuid4().hex,
     }
 
 
@@ -164,7 +166,10 @@ class QueueService:
         """Return the protocol ``queue`` message."""
         return {
             "type": "queue",
-            "items": [self.content.to_item(_item(e)) for e in self.device.store.queue],
+            "items": [
+                {**self.content.to_item(_item(e)), "qid": e["qid"]}
+                for e in self.device.store.queue
+            ],
             "max": self.max_length,
         }
 
@@ -192,25 +197,35 @@ class QueueService:
             raise InvalidRequest(f"{found.kind} cannot be queued")
         if found.kind in MUSIC_KINDS and not self.device.store.settings["music_enabled"]:
             raise NotAllowed("music is disabled")
-        if self.playback.idle and not self._lock.locked():
-            await self.playback.play_queued(uri)
+        # check and start under the lock: requests run concurrently
+        async with self._lock:
+            start = self.playback.should_start_queue()
+            queue = self.device.store.queue
+            if start and not queue:
+                await self.playback.play_queued(uri)
+                return {"started": True}
+            if len(queue) >= self.max_length:
+                raise InvalidRequest("queue_full")
+            queue.append(_entry(found))
+            self.device.store.set_queue(queue)
+            if not start:
+                await self.push()
+                return {}
+            # nothing will end by itself: the first waiting entry plays now
+            try:
+                await self._advance_locked()
+            finally:
+                await self.push()
             return {"started": True}
-        queue = self.device.store.queue
-        if len(queue) >= self.max_length:
-            raise InvalidRequest("queue_full")
-        queue.append(_entry(found))
-        self.device.store.set_queue(queue)
-        await self.push()
-        return {}
 
     async def _handle_remove(self, msg: dict[str, Any]) -> dict[str, Any]:
-        index = msg.get("index")
-        queue = self.device.store.queue
-        if not _is_int(index) or not 0 <= index < len(queue):
-            raise InvalidRequest("index out of range")
-        del queue[index]
-        self.device.store.set_queue(queue)
-        await self.push()
+        qid = msg.get("qid")
+        if not isinstance(qid, str) or not qid:
+            raise InvalidRequest("qid must be a string")
+        async with self._lock:
+            queue = self.device.store.queue
+            self.device.store.set_queue([e for e in queue if e.get("qid") != qid])
+        await self.push()  # also for an unknown qid (idempotent)
         return {}
 
     # -- auto-advance -------------------------------------------------------
@@ -223,30 +238,34 @@ class QueueService:
             )
 
     async def advance(self) -> None:
-        """Play the first entry that is still allowed; drop it and the skipped ones."""
+        """Start the next entry unless something else started in the meantime."""
         async with self._lock:
-            changed = False
-            while queue := self.device.store.queue:
-                entry = queue[0]
-                try:
-                    await self.playback.play_queued(entry["uri"])
-                except (NotAllowed, NotFound, InvalidRequest) as err:
-                    _LOGGER.debug("Skipping queue entry %s: %s", entry["uri"], err)
-                    changed = self._drop(entry) or changed
-                    continue
-                except MaUnavailable as err:
-                    _LOGGER.warning("Could not play the next queue entry: %s", err)
-                    break
-                changed = self._drop(entry) or changed
-                break
-            if changed:
+            if not self.device.store.queue or not self.playback.should_start_queue():
+                return
+            try:
+                await self._advance_locked()
+            except MaUnavailable as err:
+                _LOGGER.warning("Could not play the next queue entry: %s", err)
+            finally:
                 await self.push()
 
-    def _drop(self, entry: dict[str, Any]) -> bool:
-        """Remove ``entry`` (the list may have changed while playing)."""
+    async def _advance_locked(self) -> None:
+        """Play the first entry that is still allowed; drop it and the skipped ones.
+
+        Each entry is tried once. ``MaUnavailable`` keeps the entry and is raised.
+        """
+        while queue := self.device.store.queue:
+            entry = queue[0]
+            try:
+                await self.playback.play_queued(entry["uri"])
+            except (NotAllowed, NotFound, InvalidRequest) as err:
+                _LOGGER.debug("Skipping queue entry %s: %s", entry["uri"], err)
+                self._drop(entry)
+                continue
+            self._drop(entry)
+            return
+
+    def _drop(self, entry: dict[str, Any]) -> None:
+        """Remove ``entry`` by its qid (the list may have changed while playing)."""
         queue = self.device.store.queue
-        if entry not in queue:
-            return False
-        queue.remove(entry)
-        self.device.store.set_queue(queue)
-        return True
+        self.device.store.set_queue([e for e in queue if e.get("qid") != entry.get("qid")])
