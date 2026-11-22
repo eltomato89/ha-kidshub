@@ -79,6 +79,10 @@ def test_build_config_room_and_keys():
     assert a["colors"] == DEFAULT_COLORS
     assert b["name"] == "B" and b["kind"] == "switch"
     assert b["icon"] is None and b["colors"] == []
+    assert a["max_brightness"] is None and b["max_brightness"] is None
+    limited = _config({"room_entities": ["light.a"],
+                       "room_max_brightness": {"light.a": 40}})
+    assert limited["room"][0]["max_brightness"] == 102
 
 
 def test_build_config_radio_tile_needs_a_station():

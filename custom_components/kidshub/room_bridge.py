@@ -13,6 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .device import InvalidRequest, KidDevice, NotAllowed
+from .room import max_brightness
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,6 +111,23 @@ class RoomBridge:
             self.device.push(msg), f"kidshub_entity_state_{entity_id}"
         )
 
+    def _toggle_service(
+        self, entity_id: str, limit: int | None
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Toggle; switching on a limited light turns it on at its limit."""
+        state = self.hass.states.get(entity_id)
+        if limit is not None and state is not None and state.state == "off":
+            return ("light", "turn_on", {"brightness": limit})
+        return ("homeassistant", "toggle", {})
+
+    def _capped_brightness(self, entity_id: str, limit: int) -> int:
+        """Return the light's current brightness capped at ``limit`` (off: limit)."""
+        state = self.hass.states.get(entity_id)
+        current = None
+        if state is not None and state.state == "on":
+            current = _int_or_none(state.attributes.get("brightness"))
+        return limit if current is None or current <= 0 else min(current, limit)
+
     async def _handle_room(self, msg: dict[str, Any]) -> dict[str, Any]:
         entity_id = msg.get("entity_id")
         action = msg.get("action")
@@ -121,8 +139,9 @@ class RoomBridge:
             raise InvalidRequest("unknown action")
         domain = entity_id.split(".", 1)[0]
         value = msg.get("value")
+        limit = max_brightness(self.device.entry.options, entity_id)
         if action == "toggle":
-            service = ("homeassistant", "toggle", {})
+            service = self._toggle_service(entity_id, limit)
         elif action in _COVER_ACTIONS:
             if domain != "cover":
                 raise InvalidRequest(f"{action} needs a cover")
@@ -132,6 +151,8 @@ class RoomBridge:
                 raise InvalidRequest("set_brightness needs a light")
             if not _is_int(value) or not 0 <= value <= 255:
                 raise InvalidRequest("brightness must be an int 0..255")
+            if limit is not None:
+                value = min(value, limit)
             service = ("light", "turn_on", {"brightness": value})
         else:
             if domain != "light":
@@ -142,7 +163,10 @@ class RoomBridge:
                 or not all(_is_int(c) and 0 <= c <= 255 for c in value)
             ):
                 raise InvalidRequest("color must be [r, g, b] ints 0..255")
-            service = ("light", "turn_on", {"rgb_color": list(value)})
+            extra: dict[str, Any] = {"rgb_color": list(value)}
+            if limit is not None:
+                extra["brightness"] = self._capped_brightness(entity_id, limit)
+            service = ("light", "turn_on", extra)
         svc_domain, svc, extra = service
         try:
             await self.hass.services.async_call(

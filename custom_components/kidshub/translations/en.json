@@ -221,6 +221,10 @@
           "sendspin_url": "Sendspin URL",
           "tts_prewarm": "Pre-generate announcements"
         }
+      },
+      "room_brightness": {
+        "title": "Max. brightness",
+        "description": "Optional maximum brightness per light (empty or 100 % = no limit)."
       }
     },
     "error": {

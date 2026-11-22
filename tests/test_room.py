@@ -226,12 +226,18 @@ async def test_options_change_repushes_config(
     flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"light.decke": "Lampe"}
     )
+    assert flow["step_id"] == "room_brightness"
+    assert "light.decke" in flow["data_schema"].schema
+    flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"light.decke": 30}
+    )
     assert flow["step_id"] == "colors"
     flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"color_1": [1, 2, 3]}
     )
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["room_names"] == {"light.decke": "Lampe"}
+    assert entry.options["room_max_brightness"] == {"light.decke": 30}
     assert entry.options["colors"][0] == [1, 2, 3]
     assert len(entry.options["colors"]) == 6
 
@@ -241,6 +247,7 @@ async def test_options_change_repushes_config(
     assert msgs[0]["type"] == "config"
     assert msgs[0]["version"] > config["version"]
     assert msgs[0]["room"][0]["name"] == "Lampe"
+    assert msgs[0]["room"][0]["max_brightness"] == 76
     assert msgs[1]["type"] == "entity_state"
     await ws.close()
 
@@ -320,3 +327,78 @@ def test_entity_state_non_finite_attributes(bad) -> None:
         "cover.rollo", State("cover.rollo", "open", {"current_position": bad})
     )
     assert msg["position"] is None
+
+
+LIMITED = {"room_entities": ["light.decke", "switch.b"],
+           "room_max_brightness": {"light.decke": 30}}
+
+
+async def test_room_max_brightness_clamps_set_brightness(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    hass.states.async_set("light.decke", "on", {"brightness": 200})
+    hass.states.async_set("switch.b", "off")
+    await _setup(hass, LIMITED)
+    calls = async_mock_service(hass, "light", "turn_on")
+    ws, config = await _connect(await hass_client_no_auth())
+    assert [r["max_brightness"] for r in config["room"]] == [76, None]
+    assert (await _request(ws, 1, entity_id="light.decke", action="set_brightness",
+                           value=255))["success"]
+    assert (await _request(ws, 2, entity_id="light.decke", action="set_brightness",
+                           value=40))["success"]
+    assert [c.data["brightness"] for c in calls] == [76, 40]
+    await ws.close()
+
+
+async def test_room_max_brightness_caps_set_color(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    hass.states.async_set("light.decke", "on", {"brightness": 200})
+    await _setup(hass, LIMITED)
+    calls = async_mock_service(hass, "light", "turn_on")
+    ws, _ = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, entity_id="light.decke", action="set_color",
+                           value=[1, 2, 3]))["success"]
+    hass.states.async_set("light.decke", "on", {"brightness": 50})
+    assert (await _request(ws, 2, entity_id="light.decke", action="set_color",
+                           value=[1, 2, 3]))["success"]
+    hass.states.async_set("light.decke", "off")
+    assert (await _request(ws, 3, entity_id="light.decke", action="set_color",
+                           value=[1, 2, 3]))["success"]
+    assert [c.data["brightness"] for c in calls] == [76, 50, 76]
+    assert calls[0].data["rgb_color"] == [1, 2, 3]
+    await ws.close()
+
+
+async def test_room_max_brightness_toggle(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    hass.states.async_set("light.decke", "off")
+    hass.states.async_set("switch.b", "off")
+    await _setup(hass, LIMITED)
+    turn_on = async_mock_service(hass, "light", "turn_on")
+    toggle = async_mock_service(hass, "homeassistant", "toggle")
+    ws, _ = await _connect(await hass_client_no_auth())
+    assert (await _request(ws, 1, entity_id="light.decke", action="toggle"))["success"]
+    assert turn_on[0].data == {"entity_id": "light.decke", "brightness": 76}
+    hass.states.async_set("light.decke", "on", {"brightness": 76})
+    assert (await _request(ws, 2, entity_id="light.decke", action="toggle"))["success"]
+    assert (await _request(ws, 3, entity_id="switch.b", action="toggle"))["success"]
+    assert [c.data for c in toggle] == [
+        {"entity_id": "light.decke"}, {"entity_id": "switch.b"},
+    ]
+    assert len(turn_on) == 1
+    await ws.close()
+
+
+def test_max_brightness_option() -> None:
+    from custom_components.kidshub.room import max_brightness
+
+    opts = {"room_max_brightness": {"light.a": 100, "light.b": 1, "light.c": "x",
+                                    "light.d": 50, "switch.e": 30}}
+    assert max_brightness(opts, "light.a") is None
+    assert max_brightness(opts, "light.b") == 3
+    assert max_brightness(opts, "light.c") is None
+    assert max_brightness(opts, "light.d") == 128
+    assert max_brightness(opts, "switch.e") is None
+    assert max_brightness({}, "light.d") is None

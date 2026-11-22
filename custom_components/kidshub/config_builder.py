@@ -8,7 +8,7 @@ from typing import Any
 
 from homeassistant.core import State
 
-from .room import classify
+from .room import classify, max_brightness
 
 DEFAULT_COLORS: list[list[int]] = [
     [255, 92, 92],
@@ -47,6 +47,7 @@ def build_config(
                 "icon": state.attributes.get("icon"),
                 "kind": kind,
                 "colors": copy.deepcopy(colors) if kind == "color" else [],
+                "max_brightness": max_brightness(options, entity_id),
             }
         )
     tiles = copy.deepcopy(settings["tiles"])

@@ -35,6 +35,7 @@ from .config_builder import DEFAULT_COLORS
 from .device import InvalidRequest, MaUnavailable
 from .ma import LIBRARY_TIMEOUT
 from .pairing import PAIRING_TTL, PendingPairing
+from .room import MAX_BRIGHTNESS_OPTION
 
 PAIRING_TIMEOUT: float = PAIRING_TTL
 
@@ -288,13 +289,47 @@ class DeviceOptionsFlow(OptionsFlow):
                 for e in entities
                 if str(user_input.get(e) or "").strip()
             }
-            return await self.async_step_colors()
+            return await self.async_step_room_brightness()
         return self.async_show_form(
             step_id="room_names",
             data_schema=vol.Schema(
                 {
                     _suggested(e, old_names.get(e)): selector.TextSelector()
                     for e in entities
+                }
+            ),
+        )
+
+    async def async_step_room_brightness(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Optionally limit the brightness of each light (empty or 100 % = no limit)."""
+        lights = [
+            e for e in self._options.get("room_entities", []) if e.startswith("light.")
+        ]
+        old: dict[str, int] = self._options.get(MAX_BRIGHTNESS_OPTION) or {}
+        if user_input is not None or not lights:
+            limits: dict[str, int] = {}
+            for e in lights:
+                value = (user_input or {}).get(e)
+                if isinstance(value, int | float) and 1 <= value < 100:
+                    limits[e] = int(value)
+            self._options[MAX_BRIGHTNESS_OPTION] = limits
+            return await self.async_step_colors()
+        return self.async_show_form(
+            step_id="room_brightness",
+            data_schema=vol.Schema(
+                {
+                    _suggested(e, old.get(e)): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1,
+                            max=100,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    )
+                    for e in lights
                 }
             ),
         )

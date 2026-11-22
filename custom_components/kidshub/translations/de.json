@@ -221,6 +221,10 @@
           "sendspin_url": "Sendspin-URL",
           "tts_prewarm": "Ansagen im Voraus erzeugen"
         }
+      },
+      "room_brightness": {
+        "title": "Max. Helligkeit",
+        "description": "Optionale Höchsthelligkeit pro Lampe (leer oder 100 % = keine Grenze)."
       }
     },
     "error": {
