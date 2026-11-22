@@ -186,7 +186,7 @@ Alle Felder sind optional; ältere Gegenstellen ignorieren sie bzw. es gilt der 
 ```json
 {"type":"announce","id":"<uuid>","text":"Essen ist fertig!","url":"/api/kidshub/tts/<sha>.<ext>","volume":60}
 ```
-`volume` (0..100) fehlt → aktuelle Lautstärke; die App kappt immer auf `max_volume`. Die App spielt einen kurzen Gong, dann `url` (Musik wird wie bei TTS geduckt), weckt den Bildschirm und zeigt den Text an. Mehrere Durchsagen nacheinander; während der Wecker klingelt, wartet sie. Durchsagen gelten auch nachts und unabhängig von `speak_enabled`.
+`volume` (0..100, wie `max_volume` in Prozent der Gerätelautstärke, **nicht** die logische `state.volume`) fehlt → aktuelle Lautstärke; die App kappt immer auf `max_volume` und stellt die vorherige Lautstärke nach der Durchsage wieder her. Eine Durchsage mit einer `url` außerhalb von `/api/kidshub/` wird verworfen. Die App spielt einen kurzen Gong, dann `url` (Musik wird wie bei TTS geduckt), weckt den Bildschirm und zeigt den Text an. Mehrere Durchsagen nacheinander; während der Wecker klingelt, wartet sie. Durchsagen gelten auch nachts und unabhängig von `speak_enabled`.
 
 **Neue Requests (App → Server, mit `id`)**
 
