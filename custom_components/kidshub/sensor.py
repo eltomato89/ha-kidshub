@@ -35,6 +35,7 @@ async def async_setup_entry(
             SleepRemainingSensor(device),
             AppVersionSensor(device),
             TopRatedSensor(device),
+            WakeMusicSensor(device),
         ]
     )
 
@@ -130,3 +131,28 @@ class TopRatedSensor(KidEntity, SensorEntity):
                 for r in self._top()[:TOP_RATED_MAX_ITEMS]
             ]
         }
+
+
+class WakeMusicSensor(KidEntity, SensorEntity):
+    """Title of the wake-up music the child chose (None: the parents' choice)."""
+
+    _always_available = True
+
+    def __init__(self, device) -> None:
+        super().__init__(device, "wake_music")
+
+    def _chosen(self) -> dict[str, Any] | None:
+        chosen = self.device.store.settings["alarm"].get("wake_music")
+        return chosen if isinstance(chosen, dict) else None
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the title of the chosen wake-up music."""
+        chosen = self._chosen()
+        return (chosen.get("title") or chosen.get("uri")) if chosen else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the URI and kind of the chosen wake-up music."""
+        chosen = self._chosen() or {}
+        return {"uri": chosen.get("uri"), "kind": chosen.get("kind")}

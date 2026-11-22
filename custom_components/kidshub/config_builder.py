@@ -20,6 +20,21 @@ DEFAULT_COLORS: list[list[int]] = [
 ]
 
 
+def _wake_music(
+    stored: Any, image_url: Callable[[str | None, int], str | None] | None
+) -> dict[str, Any] | None:
+    """Return ``alarm.wake_music`` of the config from the stored choice."""
+    if not isinstance(stored, dict) or not isinstance(stored.get("uri"), str):
+        return None
+    image = stored.get("image")
+    return {
+        "uri": stored["uri"],
+        "kind": stored.get("kind"),
+        "title": stored.get("title") or "",
+        "image_url": image_url(image, 512) if image_url and image else None,
+    }
+
+
 def build_config(
     *,
     version: int,
@@ -28,8 +43,12 @@ def build_config(
     options: Mapping[str, Any],
     hass_states: Callable[[str], State | None],
     sendspin: dict[str, Any] | None,
+    image_url: Callable[[str | None, int], str | None] | None = None,
 ) -> dict[str, Any]:
-    """Return the full ``config`` message for one device."""
+    """Return the full ``config`` message for one device.
+
+    ``image_url`` turns a stored MA image into a proxy URL (and registers it).
+    """
     names = options.get("room_names") or {}
     colors = options.get("colors") or DEFAULT_COLORS
     room: list[dict[str, Any]] = []
@@ -73,6 +92,7 @@ def build_config(
             "lead_minutes": alarm["lead_minutes"],
             "with_light": alarm["with_light"],
             "button_required": alarm["button_required"],
+            "wake_music": _wake_music(alarm.get("wake_music"), image_url),
         },
         "sleep_timer": copy.deepcopy(settings["sleep_timer"]),
         "night": copy.deepcopy(settings["night"]),

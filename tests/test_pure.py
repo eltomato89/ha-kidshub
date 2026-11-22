@@ -69,7 +69,8 @@ def test_build_config_room_and_keys():
     assert cfg["speak_enabled"] is True and cfg["queue_max"] == 10
     assert cfg["tiles"]["timer"] is True
     assert set(cfg["alarm"]) == {"enabled", "time", "weekdays", "lead_minutes",
-                                 "with_light", "button_required"}
+                                 "with_light", "button_required", "wake_music"}
+    assert cfg["alarm"]["wake_music"] is None
     assert cfg["alarm"]["button_required"] is True
     assert _config({})["alarm"]["button_required"] is False
     a, b = cfg["room"]

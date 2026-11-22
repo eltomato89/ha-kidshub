@@ -184,6 +184,7 @@ class KidDevice:
             options=self.entry.options,
             hass_states=self.hass.states.get,
             sendspin=sendspin,
+            image_url=self.content.image_url if self.content is not None else None,
         )
 
     async def async_config_message(self) -> dict[str, Any]:
@@ -205,6 +206,10 @@ class KidDevice:
         """Merge ``patch`` into the settings, notify and push the config."""
         await self._apply_settings(patch)
         await self.push_config()
+
+    async def apply_settings(self, patch: dict[str, Any]) -> None:
+        """Merge ``patch`` and notify, without pushing (a handler returns PushConfig)."""
+        await self._apply_settings(patch)
 
     async def _apply_settings(self, patch: dict[str, Any]) -> None:
         await self.store.async_update_settings(copy.deepcopy(patch))

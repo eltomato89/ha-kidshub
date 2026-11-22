@@ -149,6 +149,9 @@
       },
       "top_rated": {
         "name": "Beste Bewertungen"
+      },
+      "wake_music": {
+        "name": "Weckmusik"
       }
     },
     "binary_sensor": {
@@ -162,6 +165,9 @@
       },
       "cancel_sleep_timer": {
         "name": "Einschlaf-Timer abbrechen"
+      },
+      "reset_wake_music": {
+        "name": "Weckmusik zurücksetzen"
       }
     }
   },

@@ -26,7 +26,14 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CONF_CHILD_NAME
 from .content import FAVORITES_PREFIX
-from .device import InvalidRequest, KidDevice, MaUnavailable, NotAllowed, NotFound
+from .device import (
+    InvalidRequest,
+    KidDevice,
+    MaUnavailable,
+    NotAllowed,
+    NotFound,
+    PushConfig,
+)
 from .ma import MA_DOMAIN
 
 if TYPE_CHECKING:
@@ -45,6 +52,7 @@ FROM_START_KINDS = {"album", "episode", "audiobook"}
 WAKE_FROM_START_TYPES = {"audiobook", "podcast_episode", "podcast"}  # MA media types
 
 MUSIC_KINDS = {"track", "playlist", "radio"}  # blocked by music_enabled
+WAKE_MUSIC_KINDS = {"track", "playlist"}  # what a child may choose as wake-up music
 CONTAINER_KINDS = {"playlist", "album", "podcast"}
 NOW_PLAYING_KINDS = {"track", "episode", "audiobook", "radio"}
 COMMANDS = {"pause", "resume", "next", "previous"}
@@ -140,6 +148,7 @@ class PlaybackService:
         device.register_handler("play", self._handle_play)
         device.register_handler("control", self._handle_control)
         device.register_handler("wake_play", self._handle_wake_play)
+        device.register_handler("set_wake_music", self._handle_set_wake_music)
         device.register_connected_callback(self._on_connected)
 
     @property
@@ -389,20 +398,65 @@ class PlaybackService:
         return {}
 
     async def _handle_wake_play(self, msg: dict[str, Any]) -> dict[str, Any]:
-        uri = self.device.entry.options.get("wake_media_uri")
-        if not uri:
-            raise InvalidRequest("no wake-up music configured")
-        if uri not in self.content.allowed():
-            raise NotAllowed("wake-up music is not allowed")
-        # R24: MA resumes audiobooks/episodes at its own position at seek 0
-        seek_ms = FROM_START_SEEK_MS if _media_type(uri) in WAKE_FROM_START_TYPES else 0
         try:
             async with asyncio.timeout(WAKE_PLAY_TIMEOUT):
+                uri = await self._wake_uri()
+                # R24: MA resumes audiobooks/episodes at its own position at seek 0
+                seek_ms = (
+                    FROM_START_SEEK_MS
+                    if _media_type(uri) in WAKE_FROM_START_TYPES
+                    else 0
+                )
                 await self._play([uri], 0, None, seek_ms)
         except TimeoutError as err:
             self._request_resubscribe()
             raise MaUnavailable("Music Assistant did not start in time") from err
         return {}
+
+    async def _wake_uri(self) -> str:
+        """Return the wake-up music: the child's choice if still allowed, else the parents'."""
+        chosen = self.device.store.settings["alarm"].get("wake_music")
+        if isinstance(chosen, dict) and isinstance(chosen.get("uri"), str):
+            found = await self.content.find_allowed_item(chosen["uri"])
+            if found is not None and found.kind in WAKE_MUSIC_KINDS:
+                return found.uri
+            _LOGGER.debug("Wake music %s is no longer allowed", chosen["uri"])
+        uri = self.device.entry.options.get("wake_media_uri")
+        if not uri:
+            raise InvalidRequest("no wake-up music configured")
+        if uri not in self.content.allowed():
+            raise NotAllowed("wake-up music is not allowed")
+        return uri
+
+    async def _handle_set_wake_music(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if not self.device.store.settings["settings_visible"]:
+            raise NotAllowed("settings are not visible")
+        if "uri" not in msg:
+            raise InvalidRequest("uri is required (null resets)")
+        uri = msg["uri"]
+        if uri is None:
+            await self.device.apply_settings({"alarm": {"wake_music": None}})
+            return PushConfig()
+        if not isinstance(uri, str) or not uri or uri.startswith(FAVORITES_PREFIX):
+            raise InvalidRequest("uri must be a string or null")
+        found = await self.content.find_allowed_item(uri)
+        if found is None:
+            raise NotAllowed("content not allowed")
+        if found.kind not in WAKE_MUSIC_KINDS:
+            raise InvalidRequest("only a track or a playlist can be wake-up music")
+        await self.device.apply_settings(
+            {
+                "alarm": {
+                    "wake_music": {
+                        "uri": found.uri,
+                        "kind": found.kind,
+                        "title": found.title,
+                        "image": found.image,
+                    }
+                }
+            }
+        )
+        return PushConfig()
 
     # -- queue tracking -------------------------------------------------------
 

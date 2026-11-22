@@ -23,7 +23,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up the buttons."""
     device = hass.data[DOMAIN].devices[entry.data[CONF_DEVICE_ID]]
-    async_add_entities(KidButton(device, key, msg) for key, msg in COMMANDS.items())
+    entities: list[KidEntity] = [
+        KidButton(device, key, msg) for key, msg in COMMANDS.items()
+    ]
+    entities.append(ResetWakeMusicButton(device))
+    async_add_entities(entities)
 
 
 class KidButton(KidEntity, ButtonEntity):
@@ -36,3 +40,16 @@ class KidButton(KidEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Send the command."""
         await self.device.push(dict(self._msg))
+
+
+class ResetWakeMusicButton(KidEntity, ButtonEntity):
+    """Forget the child's wake-up music (the parents' choice applies again)."""
+
+    _always_available = True
+
+    def __init__(self, device) -> None:
+        super().__init__(device, "reset_wake_music")
+
+    async def async_press(self) -> None:
+        """Reset the wake-up music and push the config."""
+        await self.device.update_settings({"alarm": {"wake_music": None}})

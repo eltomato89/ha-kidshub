@@ -149,6 +149,9 @@
       },
       "top_rated": {
         "name": "Top rated"
+      },
+      "wake_music": {
+        "name": "Wake music"
       }
     },
     "binary_sensor": {
@@ -162,6 +165,9 @@
       },
       "cancel_sleep_timer": {
         "name": "Cancel sleep timer"
+      },
+      "reset_wake_music": {
+        "name": "Reset wake music"
       }
     }
   },
